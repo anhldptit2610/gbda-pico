@@ -1,12 +1,7 @@
 #include "ppu.h"
 
 /* RGBA format */
-uint32_t gb_palette[4] = {
-    COLOR_WHITE,     /* White */
-    COLOR_LGRAY,     /* Light Gray */
-    COLOR_DGRAY,     /* Dark Gray */
-    COLOR_BLACK,     /* Black */
-};
+uint32_t palette[4] = {COLOR_WHITE, COLOR_LIGHTGRAY, COLOR_DARKGRAY, COLOR_BLACK};
 
 static void set_mode(struct gb *gb, ppu_mode_t mode)
 {
@@ -14,11 +9,11 @@ static void set_mode(struct gb *gb, ppu_mode_t mode)
     gb->ppu.mode = mode;
 }
 
-uint32_t get_color_from_palette(struct gb *gb, palette_t palette, uint8_t color_id)
+uint32_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
 {
     uint8_t *tmp = NULL;
 
-    switch (palette) {
+    switch (pal) {
     case BGP:
         tmp = &gb->ppu.bgp;
         break;
@@ -31,7 +26,7 @@ uint32_t get_color_from_palette(struct gb *gb, palette_t palette, uint8_t color_
     default:
         break;
     }
-    return gb_palette[(*tmp >> (color_id * 2)) & 0x03];
+    return palette[(*tmp >> (color_id * 2)) & 0x03];
 }
 
 uint8_t read_vram(struct gb *gb, uint16_t addr)
@@ -185,7 +180,7 @@ void ppu_draw_scanline(struct gb *gb)
         color_id_high = (read_vram(gb, tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
         color_id = color_id_low | (color_id_high << 1);
         gb->ppu.frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
-                                                                    ? get_color_from_palette(gb, BGP, color_id) : gb_palette[1];
+                                                                    ? get_color_from_palette(gb, BGP, color_id) : palette[1];
         
         // deal with sprite
         if (!gb->ppu.lcdc.obj_enable)

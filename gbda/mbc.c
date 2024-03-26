@@ -55,11 +55,11 @@ void mbc1_ram_dump(struct gb *gb)
     asprintf(&save_file, "%s.sav", gb->cart.infos.name);
     FILE *fp = fopen(save_file, "w");
     if (!fp) {
-        fprintf(stderr, "Can't open/create save file\n");
+        printf("Can't open/create save file\n");
         return;
     }
     if (fwrite(gb->cart.ram, 1, gb->cart.infos.ram_size, fp) != gb->cart.infos.ram_size)
-        fprintf(stderr, "Write failed\n");
+        printf("Write failed\n");
     fclose(fp);
 }
 
@@ -74,7 +74,7 @@ void mbc1_ram_load(struct gb *gb)
         return;
     }
     if (fread(gb->cart.ram, 1, gb->cart.infos.ram_size, fp) != gb->cart.infos.ram_size)
-        fprintf(stderr, "RAM loading failed\n");
+        printf("RAM loading failed\n");
     fclose(fp); 
 }
 
@@ -160,15 +160,15 @@ uint8_t mbc3_read(struct gb *gb, uint16_t addr)
 
 void mbc_init(struct gb *gb)
 {
-    switch (gb->cart.infos.type) {
-    case MBC1_RAM:
-    case MBC1_RAM_BATTERY:
-        mbc1_ram_load(gb);
-        break;
-    case MBC3_RAM_BATTERY:
-        //mbc3_ram_load(gb);
-        break;
-    default:
-        break;
-    }
+    // switch (gb->cart.infos.type) {
+    // case MBC1_RAM:
+    // case MBC1_RAM_BATTERY:
+    //     mbc1_ram_load(gb);
+    //     break;
+    // case MBC3_RAM_BATTERY:
+    //     //mbc3_ram_load(gb);
+    //     break;
+    // default:
+    //     break;
+    // }
 }

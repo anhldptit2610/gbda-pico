@@ -8,7 +8,7 @@ extern "C" {
 #include "mbc.h"
 #include "apu.h"
 
-void cartridge_load(struct gb *gb, char *cartridge_path);
+void cartridge_load(struct gb *gb, const uint8_t *rom, unsigned int rom_size);
 void cartridge_get_infos(struct gb *gb);
 void cartridge_print_info(struct gb *gb);
 void load_state_after_booting(struct gb *gb);

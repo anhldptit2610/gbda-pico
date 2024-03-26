@@ -3,10 +3,12 @@ add_library(gbdacore    sm83.c
                         bus.c
                         interrupt.c
                         timer.c
-                        ppu.c
-                        dma.c
-                        joypad.c
-                        mbc.c
-                        apu.c)
+                        serial.c
+                        # ppu.c
+                        # dma.c
+                        # joypad.c
+                        mbc.c)
+#                        apu.c)
 
-target_include_directories(gbdacore PUBLIC ${CMAKE_SOURCE_DIR}/core/)
+target_link_libraries(gbdacore pico_stdlib)
+target_include_directories(gbdacore PUBLIC ${CMAKE_SOURCE_DIR}/gbda/)

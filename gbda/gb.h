@@ -1,22 +1,18 @@
 #pragma once
 
-#define _GNU_SOURCE
+#include "pico/stdlib.h"
+#include "pico/mem_ops.h"
 #include <stdio.h>
-#include <stdint.h>
-#include <stdlib.h>
-#include <stdbool.h>
-#include <unistd.h>
-#include <string.h>
 #include "apu.h"
 
 #define SAMPLE_RATE             44100
 #define NUM_CHANNELS            2
 #define BUFFER_SIZE             1024
 
-#define COLOR_WHITE         0x9bbc0fff     /* White */
-#define COLOR_LGRAY         0x8bac0fff     /* Light Gray */
-#define COLOR_DGRAY         0x306230ff     /* Dark Gray */
-#define COLOR_BLACK         0x0f380fff     /* Black */
+#define COLOR_WHITE          0x9dc2
+#define COLOR_LIGHTGRAY      0x8d42
+#define COLOR_DARKGRAY       0x3306
+#define COLOR_BLACK          0x11c2
 
 #define SYSTEM_CLOCK        4194304
 #define SCREEN_WIDTH        160
@@ -25,6 +21,8 @@
 #define KiB                 1024
 #define MiB                 1048576
 
+#ifndef MACROS
+#define MACROS
 #define MSB(n)              (((uint16_t)(n) >> 8) & 0x00ff)
 #define LSB(n)              ((uint16_t)(n) & 0x00ff)
 #define TO_U16(lsb, msb)    (((uint16_t)(msb) << 8) | (uint16_t)(lsb))
@@ -32,6 +30,15 @@
 #define SET(f, n)           ((f) |= (1U << (n)))
 #define RES(f, n)           ((f) &= ~(1U << (n)))
 #define IN_RANGE(x, a, b)   ((x) >= (a) && (x) <= (b))
+#endif
+
+typedef enum {
+    TETRIS,
+    KIRBY_DREAM_LAND,
+    LEGENDS_OF_ZELDA,
+    DR_MARIO,
+    METROID_II,
+} games_t;
 
 typedef enum {
     NORMAL,
@@ -112,7 +119,7 @@ struct sm83 {
 };
 
 struct cartridge {
-    uint8_t rom[2 * MiB];
+    uint8_t *rom;
     uint8_t ram[32 * KiB];
     bool cartridge_loaded;
     struct info {
@@ -213,7 +220,7 @@ struct ppu {
     uint8_t wx;
     uint16_t ticks;
     ppu_mode_t mode;
-    uint32_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
+//    uint32_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
     bool frame_ready;
     struct oam_entry oam_entry[10];
     uint8_t oam_entry_cnt : 4;
@@ -364,7 +371,13 @@ struct apu {
     uint16_t wave_ram[16];
 };
 
+struct serial {
+    uint8_t sb;
+    uint8_t sc;
+};
+
 struct gb {
+    uint8_t mem[0x10000];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];
@@ -382,6 +395,7 @@ struct gb {
     struct joypad joypad;
     struct mbc mbc;
     struct apu apu;
+    struct serial serial;
     int screen_scaler;
     int executed_cycle;
     int user_volume;
