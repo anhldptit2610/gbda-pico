@@ -29,10 +29,10 @@ void interrupt_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     switch (addr) {
     case INTR_REG_IE:
-        gb->interrupt.ie = val | 0xe0;
+        gb->interrupt.ie = val;
         break;
     case INTR_REG_IF:
-        gb->interrupt.flag = val | 0xe0;
+        gb->interrupt.flag = val;
         break;
     default:
         break;
@@ -45,7 +45,7 @@ int interrupt_handler(struct gb *gb, uint8_t intr_src)
     gb->interrupt.flag &= ~intr_src;
     sm83_push_word(gb, gb->cpu.pc);
     gb->cpu.pc = interrupt_vector[intr_src];
-    return 5;
+    return 1;
 }
 
 void interrupt_request(struct gb *gb, uint8_t intr_src)
@@ -61,8 +61,9 @@ bool is_interrupt_pending(struct gb *gb)
 int interrupt_process(struct gb *gb)
 {
     int ret = 0;
+    bool is_interrupt = is_interrupt_pending(gb);
 
-    if (gb->cpu.ime && is_interrupt_pending(gb)) {
+    if (gb->cpu.ime && is_interrupt) {
         if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
             ret += interrupt_handler(gb, INTR_SRC_VBLANK);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)

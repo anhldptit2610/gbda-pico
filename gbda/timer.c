@@ -66,4 +66,5 @@ void timer_tick(struct gb *gb)
         }
     } 
     gb->timer.old_edge = BIT(gb->timer.div, div_bit_to_freq[gb->timer.tac.freq]);
+
 }
