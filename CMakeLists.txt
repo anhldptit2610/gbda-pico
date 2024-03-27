@@ -15,6 +15,8 @@ pico_sdk_init()
 add_subdirectory(lib)
 add_subdirectory(gbda)
 
+add_compile_options(-Wall -O3)
+
 add_executable(gbda-pico gbda-pico.c)
 
 target_include_directories(gbda-pico PUBLIC ${CMAKE_SOURCE_DIR}/lib/ili9341)
