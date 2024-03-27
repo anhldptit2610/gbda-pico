@@ -34,6 +34,9 @@
         "mem_ops.h": "c",
         "serial.h": "c",
         "bus.h": "c",
-        "mbc.h": "c"
+        "mbc.h": "c",
+        "01-special.h": "c",
+        "04-op_r_imm.h": "c",
+        "03-op_sp_hl.h": "c"
     }
 }
