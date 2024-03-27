@@ -49,7 +49,6 @@ bool is_serial_reg(uint16_t addr)
 void vram_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     gb->vram[addr - 0x8000] = val;
-    gb->mem[addr] = val;
 }
 
 void exram_write(struct gb *gb, uint16_t addr, uint8_t val)
@@ -66,32 +65,27 @@ void exram_write(struct gb *gb, uint16_t addr, uint8_t val)
     //     break;
     // }
     gb->extern_ram[addr - 0xa000] = val;
-    gb->mem[addr] = val;
 }
 
 void wram_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     gb->wram[addr - 0xc000] = val;
-    gb->mem[addr] = val;
 }
 
 void ecram_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     addr &= 0xddff;
     wram_write(gb, addr, val);
-    gb->mem[addr] = val;
 }
 
 void oam_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     gb->oam[addr - 0xfe00] = val;
-    gb->mem[addr] = val;
 }
 
 void unused_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     gb->unused[addr - 0xfea0] = val;
-    gb->mem[addr] = val;
 }
 
 void io_write(struct gb *gb, uint16_t addr, uint8_t val)
@@ -100,33 +94,19 @@ void io_write(struct gb *gb, uint16_t addr, uint8_t val)
         interrupt_write(gb, addr, val);
     else if (is_timer_reg(addr))
         timer_write(gb, addr, val);
-    // else if (is_serial_reg(addr))
-    //     serial_write(gb, addr, val);
-    else
-    // else if (is_ppu_reg(addr))
-    //     ppu_write(gb, addr, val);
-    // else if (addr == DMA_REG_DMA)
-    //     dma_write(gb, val);
-    // else if (addr == JOYPAD_REG_JOYP)
-    //     joypad_write(gb, val);
-    // else if (is_apu_reg(addr))
-    //     apu_regs_write(gb, addr, val);
-    // else if (IN_RANGE(addr, 0xff30, 0xff3f))
-    //     apu_ram_write(gb, addr, val);
-        gb->mem[addr] = val;
+    else if (is_serial_reg(addr))
+        serial_write(gb, addr, val);
 }
 
 void hram_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     gb->hram[addr - 0xff80] = val;
-    gb->mem[addr] = val;
 }
 
 /* read functions */
 uint8_t vram_read(struct gb *gb, uint16_t addr)
 {
-    //return gb->vram[addr - 0x8000];
-    return gb->mem[addr];
+    return gb->vram[addr - 0x8000];
 }
 
 uint8_t exram_read(struct gb *gb, uint16_t addr)
@@ -146,15 +126,13 @@ uint8_t exram_read(struct gb *gb, uint16_t addr)
     //     break;
     // }
     // return ret;
-    //ret = gb->extern_ram[addr - 0xa000];
-    ret = gb->mem[addr];
+    ret = gb->extern_ram[addr - 0xa000];
     return ret;
 }
 
 uint8_t wram_read(struct gb *gb, uint16_t addr)
 {
-    //return gb->wram[addr - 0xc000];
-    return gb->mem[addr];
+    return gb->wram[addr - 0xc000];
 }
 
 uint8_t ecram_read(struct gb *gb, uint16_t addr)
@@ -165,14 +143,12 @@ uint8_t ecram_read(struct gb *gb, uint16_t addr)
 
 uint8_t oam_read(struct gb *gb, uint16_t addr)
 {
-//    return gb->oam[addr - 0xfe00];
-    return gb->mem[addr];
+    return gb->oam[addr - 0xfe00];
 }
 
 uint8_t unused_read(struct gb *gb, uint16_t addr)
 {
-    return gb->mem[addr];
-    //return gb->unused[addr - 0xfea0];
+    return gb->unused[addr - 0xfea0];
 }
 
 uint8_t io_read(struct gb *gb, uint16_t addr)
@@ -183,10 +159,8 @@ uint8_t io_read(struct gb *gb, uint16_t addr)
         ret = interrupt_read(gb, addr);
     else if (is_timer_reg(addr))
         ret = timer_read(gb, addr);
-    //else if (is_serial_reg(addr))
-    //    ret = serial_read(gb, addr);
-    else 
-        ret = gb->mem[addr];
+    else if (is_serial_reg(addr))
+        ret = serial_read(gb, addr);
     // else if (is_ppu_reg(addr))
     //     ret = ppu_read(gb, addr);
     // else if (addr == DMA_REG_DMA)
@@ -202,7 +176,7 @@ uint8_t io_read(struct gb *gb, uint16_t addr)
 
 uint8_t hram_read(struct gb *gb, uint16_t addr)
 {
-    return gb->mem[addr];
+    return gb->hram[addr - 0xff80];
 }
 
 uint16_t bus_get_mem_region(uint16_t addr)
@@ -246,27 +220,9 @@ uint8_t (*read_function[])(struct gb *gb, uint16_t addr) = {
 uint8_t bus_read(struct gb *gb, uint16_t addr)
 {
     uint8_t ret = 0xff;
+    uint16_t mem_region = bus_get_mem_region(addr);
 
-    if (addr >= 0x0000 && addr <= 0x7fff)
-        ret = rom_read(gb, addr);
-    else if (addr >= 0x8000 && addr <= 0x9fff)
-        ret = vram_read(gb, addr);
-    else if (addr >= 0xa000 && addr <= 0xbfff)
-        ret = exram_read(gb, addr);
-    else if (addr >= 0xc000 && addr <= 0xdfff)
-        ret = wram_read(gb, addr);
-    else if (addr >= 0xe000 && addr <= 0xfdff)
-        ret = wram_read(gb, addr & 0xddff);
-    else if (addr >= 0xfe00 && addr <= 0xfe9f)
-        ret = oam_read(gb, addr);
-    else if (addr >= 0xfea0 && addr <= 0xfeff)
-        ret = unused_read(gb, addr);
-    else if (addr >= 0xff00 && addr <= 0xff7f)
-        ret = io_read(gb, addr);
-    else if (addr >= 0xff80 && addr <= 0xfffe)
-        ret = hram_read(gb, addr);
-    else if (addr == 0xffff)
-        ret = interrupt_read(gb, addr);
+    ret = read_function[mem_region](gb, addr);
     return ret;
 }
 
@@ -277,25 +233,7 @@ uint8_t dma_get_data(struct gb *gb, uint16_t addr)
 
 void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
+    uint16_t mem_region = bus_get_mem_region(addr);
 
-    if (addr >= 0x0000 && addr <= 0x7fff)
-        rom_write(gb, addr, val);
-    else if (addr >= 0x8000 && addr <= 0x9fff)
-        vram_write(gb, addr, val);
-    else if (addr >= 0xa000 && addr <= 0xbfff)
-        exram_write(gb, addr, val);
-    else if (addr >= 0xc000 && addr <= 0xdfff)
-        wram_write(gb, addr, val);
-    else if (addr >= 0xe000 && addr <= 0xfdff)
-        wram_write(gb, addr & 0xddff, val);
-    else if (addr >= 0xfe00 && addr <= 0xfe9f)
-        oam_write(gb, addr, val);
-    else if (addr >= 0xfea0 && addr <= 0xfeff)
-        unused_write(gb, addr, val);
-    else if (addr >= 0xff00 && addr <= 0xff7f)
-        io_write(gb, addr, val);
-    else if (addr >= 0xff80 && addr <= 0xfffe)
-        hram_write(gb, addr, val);
-    else if (addr == 0xffff)
-        interrupt_write(gb, addr, val);
+    write_function[mem_region](gb, addr, val);
 }

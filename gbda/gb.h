@@ -377,7 +377,6 @@ struct serial {
 };
 
 struct gb {
-    uint8_t mem[0x10000];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];

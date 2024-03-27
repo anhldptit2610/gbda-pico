@@ -8,6 +8,10 @@ void serial_write(struct gb *gb, uint16_t addr, uint8_t val)
         break;
     case SERIAL_REG_SC:
         gb->serial.sc = val; 
+        if (val == 0x81) {
+            printf("%c", gb->serial.sb);
+            gb->serial.sc = 0;
+        }
         break;
     default:
         break;
