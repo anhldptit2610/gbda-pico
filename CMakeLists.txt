@@ -23,6 +23,7 @@ target_include_directories(gbda-pico PUBLIC ${CMAKE_SOURCE_DIR}/lib/ili9341)
 target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/roms)
 
 target_link_libraries(gbda-pico pico_stdlib hardware_spi)
+target_link_libraries(gbda-pico pico_stdlib hardware_dma)
 target_link_libraries(gbda-pico ili9341)
 target_link_libraries(gbda-pico gbdacore)
 

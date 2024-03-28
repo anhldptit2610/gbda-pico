@@ -6,6 +6,8 @@
 #include "timer.h"
 #include "ppu.h"
 #include "apu.h"
+#include <stdio.h>
+#include <string.h>
 
 int sm83_step(struct gb *gb);
 void sm83_init(struct gb *gb);

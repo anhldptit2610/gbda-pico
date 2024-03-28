@@ -34,12 +34,9 @@ void ili9341_reset(struct ili9341 *ili9341)
     sleep_ms(50);
 }
 
-// void ili9341_write_word(struct ili9341 *ili9341, uint16_t word, ILI9341_DC dc)
-// {
-//     ili9341_select(ili9341);
-//     spi_write16_blocking(ili9341->spidev, (uint16_t *)&word, 1);
-//     ili9341_deselect(ili9341);
-// }
+/* Column range: 0x0000->0x00ef
+   Page range:   0x0000->0x013f
+*/
 void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t ep, uint16_t sc, uint16_t ec)
 {
     ili9341_write_command(ili9341, ILI9341_CASET);
@@ -55,15 +52,38 @@ void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t e
     ili9341_write_data(ili9341, LSB(ep));
 }
 
-void ili9341_draw_bitmap(struct ili9341 *ili9341, uint16_t *bitmap, int len)
+void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint16_t *bitmap, int len)
 {
+    uint8_t lsb = LSB(GBDA_BLACK), msb = MSB(GBDA_BLACK);
+    uint16_t color = GBDA_BLACK;
+
     ili9341_write_command(ili9341, ILI9341_RAMWR);
+    ili9341_select(ili9341);
+    gpio_put(ili9341->dc_pin, DATA);
+    spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
     for (int i = 0; i < 320; i++) {
         for (int j = 0; j < 240; j++) {
-            ili9341_write_data(ili9341, MSB(GBDA_BLACK));
-            ili9341_write_data(ili9341, LSB(GBDA_BLACK));
+            spi_write16_blocking(ili9341->spidev, (uint16_t *)&color, 1);
+            // spi_write_blocking(ili9341->spidev, (uint8_t *)&msb, 1);
+            // spi_write_blocking(ili9341->spidev, (uint8_t *)&lsb, 1);
         }
     }
+    ili9341_deselect(ili9341);
+    spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
+    sleep_ms(100);
+    ili9341_write_command(ili9341, ILI9341_NOP);
+}
+
+void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap)
+{
+    ili9341_write_command(ili9341, ILI9341_RAMWR);
+    ili9341_select(ili9341);
+    gpio_put(ili9341->dc_pin, DATA);
+    //spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
+    dma_start_channel_mask(1U << ili9341->dma_tx);
+    dma_channel_wait_for_finish_blocking(ili9341->dma_tx);
+    ili9341_deselect(ili9341);
+    //spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
     sleep_ms(100);
     ili9341_write_command(ili9341, ILI9341_NOP);
 }

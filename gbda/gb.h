@@ -15,6 +15,8 @@
 #define COLOR_BLACK          0x11c2
 
 #define SYSTEM_CLOCK        4194304
+#define LCD_HEIGHT          320
+#define LCD_WIDTH           240
 #define SCREEN_WIDTH        160
 #define SCREEN_HEIGHT       144
 
@@ -220,7 +222,6 @@ struct ppu {
     uint8_t wx;
     uint16_t ticks;
     ppu_mode_t mode;
-//    uint32_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
     bool frame_ready;
     struct oam_entry oam_entry[10];
     uint8_t oam_entry_cnt : 4;
@@ -377,6 +378,8 @@ struct serial {
 };
 
 struct gb {
+    // ppu's frame buffer
+    uint8_t frame_buffer[2 * LCD_HEIGHT * LCD_WIDTH];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];
@@ -399,4 +402,5 @@ struct gb {
     int executed_cycle;
     int user_volume;
     bool volume_set;
+
 };

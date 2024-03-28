@@ -1,7 +1,7 @@
 #include "ppu.h"
 
 /* RGBA format */
-uint32_t palette[4] = {COLOR_WHITE, COLOR_LIGHTGRAY, COLOR_DARKGRAY, COLOR_BLACK};
+uint16_t palette[4] = {COLOR_WHITE, COLOR_LIGHTGRAY, COLOR_DARKGRAY, COLOR_BLACK};
 
 static void set_mode(struct gb *gb, ppu_mode_t mode)
 {
@@ -9,7 +9,7 @@ static void set_mode(struct gb *gb, ppu_mode_t mode)
     gb->ppu.mode = mode;
 }
 
-uint32_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
+uint16_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
 {
     uint8_t *tmp = NULL;
 
@@ -179,7 +179,7 @@ void ppu_draw_scanline(struct gb *gb)
         color_id_low = (read_vram(gb, tile_addr + (offset_y % 8) * 2) >> (7 - (offset_x % 8))) & 0x01;
         color_id_high = (read_vram(gb, tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
         color_id = color_id_low | (color_id_high << 1);
-        gb->ppu.frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
+        gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
                                                                     ? get_color_from_palette(gb, BGP, color_id) : palette[1];
         
         // deal with sprite
@@ -198,7 +198,6 @@ void ppu_draw_scanline(struct gb *gb)
             else if (sprite_height == 16 && y_pos <= 7) // top
                 tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index | 0x01 : tile_index & 0xfe;
             tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
-            // TODO
             uint8_t test = (!gb->ppu.oam_entry[j].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
             // color_id_low = (read_vram(gb, tile_addr + (offset_y) * 2) >> (offset_x)) & 0x01;
             // color_id_high = (read_vram(gb, tile_addr + (offset_y) * 2 + 1) >> (offset_x)) & 0x01;
@@ -208,7 +207,7 @@ void ppu_draw_scanline(struct gb *gb)
             if (((ptype == BG_WIN) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[j].attributes.priority && color_id > 0))) ||
                 ((ptype == SPRITE) && (color_id > 0 && !sprite_color_id)))
                 continue;
-            gb->ppu.frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = 
+            gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = 
                             get_color_from_palette(gb, gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
             color_id = sprite_color_id;
             ptype = SPRITE;

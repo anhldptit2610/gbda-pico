@@ -2,11 +2,12 @@
 
 #include "pico/stdlib.h"
 #include "hardware/spi.h"
+#include "hardware/dma.h"
 
 #define ILI9341_SPI_PORT            spi_default
 #define ILI9341_CLK_PIN             PICO_DEFAULT_SPI_SCK_PIN 
 #define ILI9341_SDA_PIN             PICO_DEFAULT_SPI_TX_PIN
-#define ILI9341_CS_PIN              17
+#define ILI9341_CS_PIN              PICO_DEFAULT_SPI_CSN_PIN
 #define ILI9341_DC_PIN              20
 #define ILI9341_RST_PIN             21 
 
@@ -55,6 +56,7 @@ struct ili9341 {
     uint cs_pin;        /* 0 = enable */
     uint rst_pin;       /* 0 = reset */
     uint dc_pin;        /* 1 = data, 0 = command */
+    uint dma_tx;
 };
 
 // commands
@@ -109,11 +111,11 @@ struct ili9341 {
 
 void ili9341_init(struct ili9341 *ili9341, spi_inst_t *spidev, uint clk_pin, uint sda_pin, uint cs_pin, uint rst_pin, uint rs_pin);
 void ili9341_write_byte(struct ili9341 *ili9341, uint8_t byte, ILI9341_DC dc);
-void ili9341_write_word(struct ili9341 *ili9341, uint16_t word, ILI9341_DC dc);
 void ili9341_select(struct ili9341 *ili9341);
 void ili9341_deselect(struct ili9341 *ili9341);
 void ili9341_reset(struct ili9341 *ili9341);        
 void ili9341_write_command(struct ili9341 *ili9341, uint8_t cmd);
 void ili9341_write_data(struct ili9341 *ili9341, uint8_t data);
 void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t ep, uint16_t sc, uint16_t ec);
-void ili9341_draw_bitmap(struct ili9341 *ili9341, uint16_t *bitmap, int len);
+void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint16_t *bitmap, int len);
+void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap);

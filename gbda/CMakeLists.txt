@@ -4,8 +4,8 @@ add_library(gbdacore    sm83.c
                         interrupt.c
                         timer.c
                         serial.c
-                        # ppu.c
-                        # dma.c
+                        ppu.c
+                        dma.c
                         # joypad.c
                         mbc.c)
 #                        apu.c)

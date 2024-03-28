@@ -154,8 +154,6 @@ void load_state_after_booting(struct gb *gb)
     cpu->pc = 0x100;
     cpu->af.a = 0x01;
     cpu->af.f = 0x80;
-    // cpu->af.flag.z = 1;
-    // cpu->af.flag.n = 0;
     cpu->bc.val = 0x0013;
     cpu->de.val = 0x00d8;
     cpu->hl.val = 0x014d;
@@ -176,31 +174,30 @@ void load_state_after_booting(struct gb *gb)
     serial->sb = 0x00;
     serial->sc = 0x7e;
 
-    // // ppu
-    // ppu->lcdc.val = 0x91;
-    // ppu->stat.val = 0x85;
-    // ppu->scy = 0x00;
-    // ppu->scx = 0x00;
-    // ppu->ly = 0x00;
-    // ppu->lyc = 0x00;
-    // ppu->bgp = 0xfc;
-    // ppu->wy = 0x00;
-    // ppu->wx = 0x00;
-    // ppu->ticks = 0;
-    // ppu->mode = OAM_SCAN;
-    // memset(ppu->frame_buffer, COLOR_WHITE, SCREEN_WIDTH * SCREEN_HEIGHT * sizeof(uint32_t));
-    // ppu->frame_ready = false;
-    // ppu->oam_entry_cnt = 0;
-    // ppu->sprite_cnt = 0;
-    // ppu->stat_intr_line = false;
-    // ppu->stat_intr_src.val = 0;
-    // ppu->window_in_frame = false;
-    // ppu->window_line_cnt = 0;
-    // ppu->draw_window_this_line = false;
+    // ppu
+    ppu->lcdc.val = 0x91;
+    ppu->stat.val = 0x85;
+    ppu->scy = 0x00;
+    ppu->scx = 0x00;
+    ppu->ly = 0x00;
+    ppu->lyc = 0x00;
+    ppu->bgp = 0xfc;
+    ppu->wy = 0x00;
+    ppu->wx = 0x00;
+    ppu->ticks = 0;
+    ppu->mode = OAM_SCAN;
+    ppu->frame_ready = false;
+    ppu->oam_entry_cnt = 0;
+    ppu->sprite_cnt = 0;
+    ppu->stat_intr_line = false;
+    ppu->stat_intr_src.val = 0;
+    ppu->window_in_frame = false;
+    ppu->window_line_cnt = 0;
+    ppu->draw_window_this_line = false;
 
-    // // dma
-    // dma->mode = OFF;
-    // dma->reg = 0xff;
+    // dma
+    dma->mode = OFF;
+    dma->reg = 0xff;
 
     // // joypad
     // joypad->a = 1;
