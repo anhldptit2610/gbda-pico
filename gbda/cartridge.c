@@ -194,6 +194,7 @@ void load_state_after_booting(struct gb *gb)
     ppu->window_in_frame = false;
     ppu->window_line_cnt = 0;
     ppu->draw_window_this_line = false;
+    ppu->frame_ready = false;
 
     // dma
     dma->mode = OFF;

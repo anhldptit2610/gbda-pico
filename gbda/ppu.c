@@ -156,7 +156,7 @@ void ppu_draw_scanline(struct gb *gb)
     uint8_t tile_index, sprite_height, color_id_low, color_id_high, color_id,
             offset_x, offset_y, x_pos, y_pos, sprite_color_id;
     bool is_window_pixel;
-    uint16_t tile_map_addr, tile_addr;
+    uint16_t tile_map_addr, tile_addr, color;
     static int window_offset = 0;
     pixel_type_t ptype;
 
@@ -179,39 +179,41 @@ void ppu_draw_scanline(struct gb *gb)
         color_id_low = (read_vram(gb, tile_addr + (offset_y % 8) * 2) >> (7 - (offset_x % 8))) & 0x01;
         color_id_high = (read_vram(gb, tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
         color_id = color_id_low | (color_id_high << 1);
-        gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
-                                                                    ? get_color_from_palette(gb, BGP, color_id) : palette[1];
+        color = (gb->ppu.lcdc.bg_win_enable) ? get_color_from_palette(gb, BGP, color_id) : palette[1];
+        gb->frame_buffer[i * 2 + gb->ppu.ly * LCD_WIDTH * 2] = MSB(color);
+        gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * LCD_WIDTH * 2] = LSB(color);
         
         // deal with sprite
-        if (!gb->ppu.lcdc.obj_enable)
-            continue;
-        for (int j = gb->ppu.oam_entry_cnt - 1; j >= 0; j--) {
-            if (!IN_RANGE(i, gb->ppu.oam_entry[j].x - 8, gb->ppu.oam_entry[j].x))
-                continue;
-            tile_index = gb->ppu.oam_entry[j].tile_index;
-            x_pos = i - (gb->ppu.oam_entry[j].x - 8);
-            y_pos = (gb->ppu.ly - (gb->ppu.oam_entry[j].y - 16)) % 16;
-            offset_x = (gb->ppu.oam_entry[j].attributes.x_flip) ? x_pos : 7 - x_pos;
-            offset_y = (!gb->ppu.oam_entry[j].attributes.y_flip) ? y_pos : sprite_height - 1 - (y_pos);
-            if (sprite_height == 16 && y_pos >= 8)  // bottom
-                tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index & 0xfe : tile_index | 0x01;
-            else if (sprite_height == 16 && y_pos <= 7) // top
-                tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index | 0x01 : tile_index & 0xfe;
-            tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
-            uint8_t test = (!gb->ppu.oam_entry[j].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
-            // color_id_low = (read_vram(gb, tile_addr + (offset_y) * 2) >> (offset_x)) & 0x01;
-            // color_id_high = (read_vram(gb, tile_addr + (offset_y) * 2 + 1) >> (offset_x)) & 0x01;
-            color_id_low = (read_vram(gb, tile_addr + (test) * 2) >> (offset_x)) & 0x01;
-            color_id_high = (read_vram(gb, tile_addr + (test) * 2 + 1) >> (offset_x)) & 0x01;
-            sprite_color_id = color_id_low | (color_id_high << 1);
-            if (((ptype == BG_WIN) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[j].attributes.priority && color_id > 0))) ||
-                ((ptype == SPRITE) && (color_id > 0 && !sprite_color_id)))
-                continue;
-            gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = 
-                            get_color_from_palette(gb, gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
-            color_id = sprite_color_id;
-            ptype = SPRITE;
-        }
+    //     if (!gb->ppu.lcdc.obj_enable)
+    //         continue;
+    //     for (int j = gb->ppu.oam_entry_cnt - 1; j >= 0; j--) {
+    //         if (!IN_RANGE(i, gb->ppu.oam_entry[j].x - 8, gb->ppu.oam_entry[j].x))
+    //             continue;
+    //         tile_index = gb->ppu.oam_entry[j].tile_index;
+    //         x_pos = i - (gb->ppu.oam_entry[j].x - 8);
+    //         y_pos = (gb->ppu.ly - (gb->ppu.oam_entry[j].y - 16)) % 16;
+    //         offset_x = (gb->ppu.oam_entry[j].attributes.x_flip) ? x_pos : 7 - x_pos;
+    //         offset_y = (!gb->ppu.oam_entry[j].attributes.y_flip) ? y_pos : sprite_height - 1 - (y_pos);
+    //         if (sprite_height == 16 && y_pos >= 8)  // bottom
+    //             tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index & 0xfe : tile_index | 0x01;
+    //         else if (sprite_height == 16 && y_pos <= 7) // top
+    //             tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index | 0x01 : tile_index & 0xfe;
+    //         tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
+    //         uint8_t test = (!gb->ppu.oam_entry[j].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
+    //         color_id_low = (read_vram(gb, tile_addr + (test) * 2) >> (offset_x)) & 0x01;
+    //         color_id_high = (read_vram(gb, tile_addr + (test) * 2 + 1) >> (offset_x)) & 0x01;
+    //         sprite_color_id = color_id_low | (color_id_high << 1);
+    //         if (((ptype == BG_WIN) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[j].attributes.priority && color_id > 0))) ||
+    //             ((ptype == SPRITE) && (color_id > 0 && !sprite_color_id)))
+    //             continue;
+    //         gb->frame_buffer[0 + i * 2 + gb->ppu.ly * SCREEN_WIDTH] = 
+    //                         get_color_from_palette(gb, gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
+    //         color_id = sprite_color_id;
+    //         color = get_color_from_palette(gb, gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
+    //         gb->frame_buffer[i * 2 + gb->ppu.ly * SCREEN_WIDTH] = MSB(color);
+    //         gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * SCREEN_WIDTH] = LSB(color);
+    //         ptype = SPRITE;
+    //     }
     }
     window_offset = 0;
 }
@@ -253,7 +255,7 @@ void ppu_tick(struct gb *gb)
             gb->ppu.ly++;
             gb->ppu.stat_intr_src.val = 0;
             gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
-            if (gb->ppu.ly == 144) {
+            if (gb->ppu.ly == SCREEN_HEIGHT) {
                 set_mode(gb, VBLANK);
                 if (gb->ppu.lcdc.ppu_enable)
                     interrupt_request(gb, INTR_SRC_VBLANK);

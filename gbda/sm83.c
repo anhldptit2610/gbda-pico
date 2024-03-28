@@ -58,9 +58,8 @@ void sm83_cycle_when_interrupt(struct gb *gb)
     }
 }
 
-bool sm83_cycle(struct gb *gb, int cycles)
+void sm83_cycle(struct gb *gb, int cycles)
 {
-    bool is_interrupt;
     static int i = 0;
 
     for (int j = 0; j < cycles; j++) {
@@ -79,8 +78,6 @@ bool sm83_cycle(struct gb *gb, int cycles)
             }
         }
     }
-    is_interrupt = interrupt_process(gb);
-    return is_interrupt;
 }
 
 void sm83_init(struct gb *gb)
@@ -1142,5 +1139,7 @@ int sm83_step(struct gb *gb)
         printf("Unknown opcode 0x%02x\n", opcode);
         break;
     }
+    gb->executed_cycle += interrupt_process(gb);
     return gb->executed_cycle;
+
 }

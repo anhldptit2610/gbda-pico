@@ -184,6 +184,7 @@ struct oam_entry {
 };
 
 struct ppu {
+    bool frame_ready;
     union {
         uint8_t val;
         struct {
@@ -222,7 +223,6 @@ struct ppu {
     uint8_t wx;
     uint16_t ticks;
     ppu_mode_t mode;
-    bool frame_ready;
     struct oam_entry oam_entry[10];
     uint8_t oam_entry_cnt : 4;
     uint8_t sprite_cnt : 4;
