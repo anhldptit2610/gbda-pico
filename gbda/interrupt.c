@@ -45,7 +45,7 @@ int interrupt_handler(struct gb *gb, uint8_t intr_src)
     gb->interrupt.flag &= ~intr_src;
     sm83_push_word(gb, gb->cpu.pc);
     gb->cpu.pc = interrupt_vector[intr_src];
-    return 5;
+    return 1;
 }
 
 void interrupt_request(struct gb *gb, uint8_t intr_src)

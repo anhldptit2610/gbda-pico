@@ -26,21 +26,29 @@ void gbda_pico_setup(struct gb *gb, struct ili9341 *ili9341)
 
     //grab a unused DMA channel and configure it
     ili9341->dma_tx = dma_claim_unused_channel(true);
-    ili9341->dma_config = dma_channel_get_default_config(ili9341->dma_tx);
-    channel_config_set_transfer_data_size(&ili9341->dma_config, DMA_SIZE_8);
-    channel_config_set_write_increment(&ili9341->dma_config, false);
-    channel_config_set_read_increment(&ili9341->dma_config, true);
-    channel_config_set_dreq(&ili9341->dma_config, spi_get_dreq(ILI9341_SPI_PORT, true));
+    dma_channel_config c = dma_channel_get_default_config(ili9341->dma_tx);
+    channel_config_set_transfer_data_size(&c, DMA_SIZE_8);
+    channel_config_set_write_increment(&c, false);
+    channel_config_set_read_increment(&c, true);
+    channel_config_set_dreq(&c, spi_get_dreq(ILI9341_SPI_PORT, true));
+    dma_channel_configure(ili9341->dma_tx, &c,
+                        &spi_get_hw(ILI9341_SPI_PORT)->dr,       // write addr
+                        gb->frame_buffer,
+                        320 * 240 * 2,
+                        false);
 
     /* LCD init */
     ili9341_init(ili9341, spi_default, ILI9341_CLK_PIN, ILI9341_SDA_PIN,
                  ILI9341_CS_PIN, ILI9341_RST_PIN, ILI9341_DC_PIN);    
-    ili9341_set_display_region(ili9341, 0, 0x013f, 0, 0x00ef);
 
     /* GameBoy init */
     sm83_init(gb);
-    cartridge_load(gb, tetris, tetris_rom_size);
+    cartridge_load(gb, __05_op_rp_gb, __05_op_rp_gb_len);
     load_state_after_booting(gb);
+
+    ili9341_set_display_region(ili9341, 0, 0x013f, 0, 0x00ef);
+    ili9341_draw_bitmap_dma(ili9341, gb->frame_buffer);
+    //ili9341_draw_bitmap_plainspi(ili9341, NULL, 0);
 }
 
 int main() {
@@ -52,12 +60,10 @@ int main() {
 
     gbda_pico_setup(&gb, &ili9341);
     while(1) {
-        while (!gb.ppu.frame_ready) {
-            cycles = sm83_step(&gb);
-            sm83_cycle(&gb, cycles);
-        }
-        gb.ppu.frame_ready = false;
-        ili9341_draw_bitmap_dma(&ili9341, gb.frame_buffer);
+        // cycles = sm83_step(&gb);
+        // is_interrupt = sm83_cycle(&gb, cycles);
+        // if (is_interrupt)
+        //     sm83_cycle_when_interrupt(&gb);
     }
 
 }
