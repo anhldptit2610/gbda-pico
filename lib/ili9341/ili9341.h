@@ -1,15 +1,8 @@
 #pragma once
 
 #include "pico/stdlib.h"
-#include "hardware/spi.h"
 #include "hardware/dma.h"
-
-#define ILI9341_SPI_PORT            spi_default
-#define ILI9341_CLK_PIN             PICO_DEFAULT_SPI_SCK_PIN 
-#define ILI9341_SDA_PIN             PICO_DEFAULT_SPI_TX_PIN
-#define ILI9341_CS_PIN              PICO_DEFAULT_SPI_CSN_PIN
-#define ILI9341_DC_PIN              20
-#define ILI9341_RST_PIN             21 
+#include "hardware/spi.h"
 
 #ifndef MACROS
 #define MACROS
@@ -44,6 +37,13 @@
 #define GBDA_DARKGRAY       0x3306
 #define GBDA_BLACK          0x11c2
 
+#define ILI9341_SPI_PORT            spi_default
+#define ILI9341_CLK_PIN             PICO_DEFAULT_SPI_SCK_PIN 
+#define ILI9341_SDA_PIN             PICO_DEFAULT_SPI_TX_PIN
+#define ILI9341_CS_PIN              PICO_DEFAULT_SPI_CSN_PIN
+#define ILI9341_DC_PIN              20
+#define ILI9341_RST_PIN             21 
+
 typedef enum {
     CMD,
     DATA,
@@ -57,6 +57,7 @@ struct ili9341 {
     uint rst_pin;       /* 0 = reset */
     uint dc_pin;        /* 1 = data, 0 = command */
     uint dma_tx;
+    dma_channel_config dma_config;
 };
 
 // commands
@@ -113,9 +114,9 @@ void ili9341_init(struct ili9341 *ili9341, spi_inst_t *spidev, uint clk_pin, uin
 void ili9341_write_byte(struct ili9341 *ili9341, uint8_t byte, ILI9341_DC dc);
 void ili9341_select(struct ili9341 *ili9341);
 void ili9341_deselect(struct ili9341 *ili9341);
-void ili9341_reset(struct ili9341 *ili9341);        
-void ili9341_write_command(struct ili9341 *ili9341, uint8_t cmd);
+void ILI9341_RESET(struct ili9341 *ili9341);        
 void ili9341_write_data(struct ili9341 *ili9341, uint8_t data);
+void ili9341_write_command(struct ili9341 *ili9341, uint8_t cmd);
 void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t ep, uint16_t sc, uint16_t ec);
-void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint16_t *bitmap, int len);
-void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap);
+void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint8_t *bitmap, int len);
+void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint8_t *bitmap);

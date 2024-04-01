@@ -13,20 +13,16 @@ pico_sdk_init()
 
 # rest of your project
 add_subdirectory(lib)
-add_subdirectory(gbda)
 
 add_compile_options(-Wall -O3)
 
-add_executable(gbda-pico gbda-pico.c)
+add_executable(gbda-pico gbda-pico.c gbda-pico.h)
 
 target_include_directories(gbda-pico PUBLIC ${CMAKE_SOURCE_DIR}/lib/ili9341)
 target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/roms)
 
-target_link_libraries(gbda-pico pico_stdlib hardware_spi)
-target_link_libraries(gbda-pico pico_stdlib hardware_dma)
 target_link_libraries(gbda-pico ili9341)
-target_link_libraries(gbda-pico gbdacore)
-
+target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore hardware_timer)
 
 pico_enable_stdio_uart(gbda-pico 1)
 pico_enable_stdio_usb(gbda-pico 0)

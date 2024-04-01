@@ -37,6 +37,7 @@
         "mbc.h": "c",
         "01-special.h": "c",
         "04-op_r_imm.h": "c",
-        "03-op_sp_hl.h": "c"
+        "03-op_sp_hl.h": "c",
+        "gbda-pico.h": "c"
     }
 }
