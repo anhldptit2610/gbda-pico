@@ -119,4 +119,5 @@ void ili9341_write_data(struct ili9341 *ili9341, uint8_t data);
 void ili9341_write_command(struct ili9341 *ili9341, uint8_t cmd);
 void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t ep, uint16_t sc, uint16_t ec);
 void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint8_t *bitmap, int len);
-void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint8_t *bitmap);
+//void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint8_t *bitmap);
+void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap);

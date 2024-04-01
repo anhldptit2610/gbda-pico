@@ -80,7 +80,7 @@ int main() {
     //grab a unused DMA channel and configure it
     ili9341.dma_tx = dma_claim_unused_channel(true);
     ili9341.dma_config = dma_channel_get_default_config(ili9341.dma_tx);
-    channel_config_set_transfer_data_size(&ili9341.dma_config, DMA_SIZE_8);
+    channel_config_set_transfer_data_size(&ili9341.dma_config, DMA_SIZE_16);
     channel_config_set_write_increment(&ili9341.dma_config, false);
     channel_config_set_read_increment(&ili9341.dma_config, true);
     channel_config_set_dreq(&ili9341.dma_config, spi_get_dreq(ILI9341_SPI_PORT, true));

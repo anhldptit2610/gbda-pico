@@ -367,7 +367,8 @@ struct serial {
 };
 
 struct gb {
-    uint8_t frame_buffer[2 * SCREEN_HEIGHT * SCREEN_WIDTH];
+    //uint8_t frame_buffer[2 * SCREEN_HEIGHT * SCREEN_WIDTH];
+    uint16_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];
@@ -1705,10 +1706,10 @@ void ppu_draw_scanline(struct gb *gb)
         color_id_high = (READ_VRAM(tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
 set_frame_buffer:
         color = (gb->ppu.lcdc.bg_win_enable) ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
-        // gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
-        //                                                             ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
-        gb->frame_buffer[i * 2 + gb->ppu.ly * 2 * SCREEN_WIDTH] = MSB(color);
-        gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * 2 * SCREEN_WIDTH] = LSB(color);
+        gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
+                                                                    ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
+        // gb->frame_buffer[i * 2 + gb->ppu.ly * 2 * SCREEN_WIDTH] = MSB(color);
+        // gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * 2 * SCREEN_WIDTH] = LSB(color);
          
         // deal with sprite
         // if (!gb->ppu.lcdc.obj_enable)
@@ -1992,9 +1993,12 @@ void load_state_after_booting(struct gb *gb)
 
     gb->mode = NORMAL;
 
-    for (int i = 0; i < 160 * 144 * 2; i+=2) {
-        gb->frame_buffer[i] = MSB(COLOR_BLACK);
-        gb->frame_buffer[i + 1] = LSB(COLOR_BLACK);
+    // for (int i = 0; i < 160 * 144 * 2; i+=2) {
+    //     gb->frame_buffer[i] = MSB(COLOR_BLACK);
+    //     gb->frame_buffer[i + 1] = LSB(COLOR_BLACK);
+    // }
+    for (int i = 0; i < 160 * 144; i++) {
+        gb->frame_buffer[i] = COLOR_BLACK;
     }
 
     // cpu

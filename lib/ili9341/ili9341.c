@@ -72,18 +72,20 @@ void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint8_t *bitmap, int 
     ili9341_write_command(ili9341, ILI9341_NOP);
 }
 
-void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint8_t *bitmap)
+void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap)
 {
     ili9341_write_command(ili9341, ILI9341_RAMWR);
     ili9341_select(ili9341);
     gpio_put(ili9341->dc_pin, DATA);
+    spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
     dma_channel_configure(ili9341->dma_tx, &ili9341->dma_config,
                         &spi_get_hw(ILI9341_SPI_PORT)->dr,       // write addr
                         bitmap,
-                        144 * 160 * 2,
+                        144 * 160,
                         //320 * 240 * 2,
                         true);
     dma_channel_wait_for_finish_blocking(ili9341->dma_tx);
+    spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
     ili9341_deselect(ili9341);
     sleep_ms(100);
     ili9341_write_command(ili9341, ILI9341_NOP);
