@@ -207,6 +207,7 @@ struct memory_access_record {
 struct interrupt {
     uint8_t ie;
     uint8_t flag;
+    bool interrupt_handled;
 };
 
 struct timer {
@@ -496,14 +497,13 @@ void push_word(struct gb *gb, uint16_t val);
 /* interrupt declarations */
 uint8_t interrupt_read(struct gb *gb, uint16_t addr);
 void interrupt_write(struct gb *gb, uint16_t addr, uint8_t val);
-int interrupt_process(struct gb *gb);
+void interrupt_process(struct gb *gb);
 void interrupt_request(struct gb *gb, uint8_t intr_src);
 bool is_interrupt_pending(struct gb *gb);
 
 /* timer declarations */
 uint8_t timer_read(struct gb *gb, uint16_t addr);
 void timer_write(struct gb *gb, uint16_t addr, uint8_t val);
-void timer_tick(struct gb *gb);
 
 /* CPU declarations */
 void cpu_step(struct gb *gb);
@@ -511,32 +511,13 @@ void cpu_init(struct gb *gb);
 void cpu_cycle(struct gb *gb, int cycles);
 
 /* PPU declarations */
+int cmpfunc(const void *a, const void *b);
 uint8_t ppu_read(struct gb *gb, uint16_t addr);
 void ppu_write(struct gb *gb, uint16_t addr, uint8_t val);
-void ppu_tick(struct gb *gb);
 
 /**********************************************************************************************/
 /************************************* CPU related parts **************************************/
 /**********************************************************************************************/
-
-
-
-void sm83_tick(struct gb *gb)
-{
-    for (int i = 0; i < 4; i++) {
-        timer_tick(gb);
-        ppu_tick(gb);
-        // apu_tick(gb);
-    }
-}
-
-void sm83_cycle_when_interrupt(struct gb *gb)
-{
-    // interrupt handler costs 5 M-cycles, each M-cycle = 4 T-cycle
-    for (int i = 0; i < 20; i++) {
-        timer_tick(gb);
-    }
-}
 
 void sm83_init(struct gb *gb)
 {
@@ -544,35 +525,29 @@ void sm83_init(struct gb *gb)
     gb->cart.cartridge_loaded = false;
 }
 
-uint8_t sm83_fetch_byte(struct gb *gb)
-{
-    uint8_t ret = 0xff;
+#define SM83_FETCH_BYTE()                   \
+    bus_read(gb, gb->cpu.pc++)
 
-    if (gb->mode == HALT) {
-        ret = 0x76;
-    } else {
-        ret = bus_read(gb, gb->cpu.pc++);
-    }
-    return ret;
-}
+#define SM83_FETCH_WORD(ret)            \
+    lsb = SM83_FETCH_BYTE();            \
+    msb = SM83_FETCH_BYTE();            \
+    ret = TO_U16(lsb, msb)
 
 uint16_t sm83_fetch_word(struct gb *gb)
 {
-    uint8_t lsb = sm83_fetch_byte(gb);
-    uint8_t msb = sm83_fetch_byte(gb);
+    uint8_t lsb = SM83_FETCH_BYTE();
+    uint8_t msb = SM83_FETCH_BYTE();
 
     return TO_U16(lsb, msb);
 }
 
-void sm83_push_byte(struct gb *gb, uint8_t val)
-{
-    bus_write(gb, --gb->cpu.sp, val);
-}
+#define SM83_PUSH_BYTE(val)             \
+    bus_write(gb, --gb->cpu.sp, val)
 
 void sm83_push_word(struct gb *gb, uint16_t val)
 {
-    sm83_push_byte(gb, MSB(val));
-    sm83_push_byte(gb, LSB(val));
+    SM83_PUSH_BYTE(MSB(val));
+    SM83_PUSH_BYTE(LSB(val));
 }
 
 uint8_t sm83_pop_byte(struct gb *gb)
@@ -589,12 +564,12 @@ uint16_t sm83_pop_word(struct gb *gb)
     return TO_U16(lsb, msb);
 }
 
-// #define toggle_znh(gb, res, fn, fh)             \
-//     gb->cpu.af.flag.z = !(uint8_t)(res);      \
-//     gb->cpu.af.flag.n = (bool)(fn);           \
-//     gb->cpu.af.flag.h = (bool)(fh)
+#define TOGGLE_ZNH(res, fn, fh)             \
+    gb->cpu.af.flag.z = !(uint8_t)(res);      \
+    gb->cpu.af.flag.n = (bool)(fn);           \
+    gb->cpu.af.flag.h = (bool)(fh)
 
-static inline void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
+void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
 {
     gb->cpu.af.flag.z = !res;
     gb->cpu.af.flag.n = n;
@@ -636,51 +611,51 @@ static inline void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
     res = gb->cpu.af.a + b + d;                     \
     carry_per_bit = res ^ gb->cpu.af.a ^ b;         \
     gb->cpu.af.a = res;                             \
-    toggle_znh(gb, res, 0, BIT(carry_per_bit, 4));  \
+    TOGGLE_ZNH(res, 0, BIT(carry_per_bit, 4));  \
     gb->cpu.af.flag.c = BIT(carry_per_bit, 8)       
 
 #define SUB(b, d)                                                                                               \
     res = gb->cpu.af.a + ~b + 1 - d;                \
     carry_per_bit = res ^ gb->cpu.af.a ^ ~b;        \
     gb->cpu.af.a = res;                             \
-    toggle_znh(gb, res, 1, !BIT(carry_per_bit, 4)); \
+    TOGGLE_ZNH(res, 1, !BIT(carry_per_bit, 4)); \
     gb->cpu.af.flag.c = !BIT(carry_per_bit, 8);    
 
 #define CP(b)                                                                                                   \
-    toggle_znh(gb, gb->cpu.af.a + ~b + 1, 1, !BIT(gb->cpu.af.a ^ ~b ^ (gb->cpu.af.a + ~b + 1), 4));             \
+    TOGGLE_ZNH(gb->cpu.af.a + ~b + 1, 1, !BIT(gb->cpu.af.a ^ ~b ^ (gb->cpu.af.a + ~b + 1), 4));             \
     gb->cpu.af.flag.c = !BIT(gb->cpu.af.a ^ ~b ^ (gb->cpu.af.a + ~b + 1), 8)
 
 #define INC_R(r)                                            \
-    toggle_znh(gb, r + 1, 0, BIT((r + 1) ^ r ^ 1, 4));      \
+    TOGGLE_ZNH(r + 1, 0, BIT((r + 1) ^ r ^ 1, 4));      \
     r += 1
 
 #define INC_INDIRECT_HL()                                               \
     operand = bus_read(gb, gb->cpu.hl.val);                             \
     bus_write(gb, gb->cpu.hl.val, operand + 1);                         \
-    toggle_znh(gb, operand + 1, 0, BIT((operand + 1) ^ operand ^ 1U, 4))
+    TOGGLE_ZNH(operand + 1, 0, BIT((operand + 1) ^ operand ^ 1U, 4))
 
 #define DEC_R(r)                                               \
-    toggle_znh(gb, r - 1, 1, !BIT((r - 1) ^ r ^ 0xff, 4));     \
+    TOGGLE_ZNH(r - 1, 1, !BIT((r - 1) ^ r ^ 0xff, 4));     \
     r--;
 
 #define DEC_INDIRECT_HL()                                               \
     operand = bus_read(gb, gb->cpu.hl.val);                             \
     bus_write(gb, gb->cpu.hl.val, operand - 1);                         \
-    toggle_znh(gb, operand - 1, 1, !BIT((operand - 1) ^ operand ^ 0xff, 4))
+    TOGGLE_ZNH(operand - 1, 1, !BIT((operand - 1) ^ operand ^ 0xff, 4))
 
 #define AND(b)                          \
     gb->cpu.af.a &= b;                  \
-    toggle_znh(gb, gb->cpu.af.a, 0, 1); \
+    TOGGLE_ZNH(gb->cpu.af.a, 0, 1); \
     gb->cpu.af.flag.c = 0
 
 #define OR(b)                              \
     gb->cpu.af.a |= b;                     \
-    toggle_znh(gb, gb->cpu.af.a, 0, 0);    \
+    TOGGLE_ZNH(gb->cpu.af.a, 0, 0);    \
     gb->cpu.af.flag.c = 0 
 
 #define XOR(b)                             \
     gb->cpu.af.a ^= b;                     \
-    toggle_znh(gb, gb->cpu.af.a, 0, 0);    \
+    TOGGLE_ZNH(gb->cpu.af.a, 0, 0);    \
     gb->cpu.af.flag.c = 0 
 
 #define CCF()                               \
@@ -860,14 +835,14 @@ static inline void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
 
 #define SWAP_R(r)                               \
     r = (r >> 4) | (r << 4);                    \
-    toggle_znh(gb, r, 0, 0);                    \
+    TOGGLE_ZNH(r, 0, 0);                    \
     gb->cpu.af.flag.c = 0
 
 #define SWAP_INDIRECT_HL()                      \
     val = bus_read(gb, gb->cpu.hl.val);         \
     val = (val >> 4) | (val << 4);              \
     bus_write(gb, gb->cpu.hl.val, val);         \
-    toggle_znh(gb, val, 0, 0);                  \
+    TOGGLE_ZNH(val, 0, 0);                  \
     gb->cpu.af.flag.c = 0
 
 #define SRL_R(r)                    \
@@ -885,11 +860,11 @@ static inline void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
     gb->cpu.af.flag.n = gb->cpu.af.flag.h = 0
 
 #define BIT_N_R(n, r)                   \
-    toggle_znh(gb, BIT(r, n), 0, 1)
+    TOGGLE_ZNH(BIT(r, n), 0, 1)
 
 #define BIT_N_INDIRECT_HL(n)                    \
     val = bus_read(gb, gb->cpu.hl.val);         \
-    toggle_znh(gb, BIT(val, n), 0, 1)
+    TOGGLE_ZNH(BIT(val, n), 0, 1)
 
 #define RES_N_R(n, r)                           \
     RES(r, n)
@@ -937,9 +912,6 @@ static inline void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
 
 #define HALT()                      \
     gb->mode = HALT;                \
-    if (IS_INTERRUPT_PENDING()) {   \
-        gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;  \
-    }
 
 #define DI()                    \
     gb->cpu.ime = false
@@ -958,7 +930,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x03: RLC_R(gb->cpu.de.e);                              break;
     case 0x04: RLC_R(gb->cpu.hl.h);                              break;
     case 0x05: RLC_R(gb->cpu.hl.l);                              break;
-    case 0x06: RLC_INDIRECT_HL();                                     break;
+    case 0x06: RLC_INDIRECT_HL();                                break;
     case 0x07: RLC_R(gb->cpu.af.a);                              break;
     case 0x08: RRC_R(gb->cpu.bc.b);                              break;
     case 0x09: RRC_R(gb->cpu.bc.c);                              break;
@@ -966,7 +938,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x0b: RRC_R(gb->cpu.de.e);                              break;
     case 0x0c: RRC_R(gb->cpu.hl.h);                              break;
     case 0x0d: RRC_R(gb->cpu.hl.l);                              break;
-    case 0x0e: RRC_INDIRECT_HL();                                     break;
+    case 0x0e: RRC_INDIRECT_HL();                                break;
     case 0x0f: RRC_R(gb->cpu.af.a);                              break;
     case 0x10: RL_R(gb->cpu.bc.b);                               break;
     case 0x11: RL_R(gb->cpu.bc.c);                               break;
@@ -974,7 +946,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x13: RL_R(gb->cpu.de.e);                               break;
     case 0x14: RL_R(gb->cpu.hl.h);                               break;
     case 0x15: RL_R(gb->cpu.hl.l);                               break;
-    case 0x16: RL_INDIRECT_HL();                                      break;
+    case 0x16: RL_INDIRECT_HL();                                 break;
     case 0x17: RL_R(gb->cpu.af.a);                               break;
     case 0x18: RR_R(gb->cpu.bc.b);                               break;
     case 0x19: RR_R(gb->cpu.bc.c);                               break;
@@ -982,7 +954,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x1b: RR_R(gb->cpu.de.e);                               break;
     case 0x1c: RR_R(gb->cpu.hl.h);                               break;
     case 0x1d: RR_R(gb->cpu.hl.l);                               break;
-    case 0x1e: RR_INDIRECT_HL();                                      break;
+    case 0x1e: RR_INDIRECT_HL();                                 break;
     case 0x1f: RR_R(gb->cpu.af.a);                               break;
     case 0x20: SLA_R(gb->cpu.bc.b);                              break;
     case 0x21: SLA_R(gb->cpu.bc.c);                              break;
@@ -990,7 +962,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x23: SLA_R(gb->cpu.de.e);                              break;
     case 0x24: SLA_R(gb->cpu.hl.h);                              break;
     case 0x25: SLA_R(gb->cpu.hl.l);                              break;
-    case 0x26: SLA_INDIRECT_HL();                                     break;
+    case 0x26: SLA_INDIRECT_HL();                                break;
     case 0x27: SLA_R(gb->cpu.af.a);                              break;
     case 0x28: SRA_R(gb->cpu.bc.b);                              break;
     case 0x29: SRA_R(gb->cpu.bc.c);                              break;
@@ -998,7 +970,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x2b: SRA_R(gb->cpu.de.e);                              break;
     case 0x2c: SRA_R(gb->cpu.hl.h);                              break;
     case 0x2d: SRA_R(gb->cpu.hl.l);                              break;
-    case 0x2e: SRA_INDIRECT_HL();                                     break;
+    case 0x2e: SRA_INDIRECT_HL();                                break;
     case 0x2f: SRA_R(gb->cpu.af.a);                              break;
     case 0x30: SWAP_R(gb->cpu.bc.b);                             break;
     case 0x31: SWAP_R(gb->cpu.bc.c);                             break;
@@ -1006,7 +978,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x33: SWAP_R(gb->cpu.de.e);                             break;
     case 0x34: SWAP_R(gb->cpu.hl.h);                             break;
     case 0x35: SWAP_R(gb->cpu.hl.l);                             break;
-    case 0x36: SWAP_INDIRECT_HL();                                    break;
+    case 0x36: SWAP_INDIRECT_HL();                               break;
     case 0x37: SWAP_R(gb->cpu.af.a);                             break;
     case 0x38: SRL_R(gb->cpu.bc.b);                              break;
     case 0x39: SRL_R(gb->cpu.bc.c);                              break;
@@ -1014,7 +986,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x3b: SRL_R(gb->cpu.de.e);                              break;
     case 0x3c: SRL_R(gb->cpu.hl.h);                              break;
     case 0x3d: SRL_R(gb->cpu.hl.l);                              break;
-    case 0x3e: SRL_INDIRECT_HL();                                     break;
+    case 0x3e: SRL_INDIRECT_HL();                                break;
     case 0x3f: SRL_R(gb->cpu.af.a);                              break;
     case 0x40: BIT_N_R(0, gb->cpu.bc.b);                         break;
     case 0x41: BIT_N_R(0, gb->cpu.bc.c);                         break;
@@ -1022,7 +994,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x43: BIT_N_R(0, gb->cpu.de.e);                         break;
     case 0x44: BIT_N_R(0, gb->cpu.hl.h);                         break;
     case 0x45: BIT_N_R(0, gb->cpu.hl.l);                         break;
-    case 0x46: BIT_N_INDIRECT_HL(0);                                break;
+    case 0x46: BIT_N_INDIRECT_HL(0);                             break;
     case 0x47: BIT_N_R(0, gb->cpu.af.a);                         break;
     case 0x48: BIT_N_R(1, gb->cpu.bc.b);                         break;
     case 0x49: BIT_N_R(1, gb->cpu.bc.c);                         break;
@@ -1030,7 +1002,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x4b: BIT_N_R(1, gb->cpu.de.e);                         break;
     case 0x4c: BIT_N_R(1, gb->cpu.hl.h);                         break;
     case 0x4d: BIT_N_R(1, gb->cpu.hl.l);                         break;
-    case 0x4e: BIT_N_INDIRECT_HL(1);                                break;
+    case 0x4e: BIT_N_INDIRECT_HL(1);                             break;
     case 0x4f: BIT_N_R(1, gb->cpu.af.a);                         break;
     case 0x50: BIT_N_R(2, gb->cpu.bc.b);                         break;
     case 0x51: BIT_N_R(2, gb->cpu.bc.c);                         break;
@@ -1038,7 +1010,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x53: BIT_N_R(2, gb->cpu.de.e);                         break;
     case 0x54: BIT_N_R(2, gb->cpu.hl.h);                         break;
     case 0x55: BIT_N_R(2, gb->cpu.hl.l);                         break;
-    case 0x56: BIT_N_INDIRECT_HL(2);                                break;
+    case 0x56: BIT_N_INDIRECT_HL(2);                             break;
     case 0x57: BIT_N_R(2, gb->cpu.af.a);                         break;
     case 0x58: BIT_N_R(3, gb->cpu.bc.b);                         break;
     case 0x59: BIT_N_R(3, gb->cpu.bc.c);                         break;
@@ -1046,7 +1018,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x5b: BIT_N_R(3, gb->cpu.de.e);                         break;
     case 0x5c: BIT_N_R(3, gb->cpu.hl.h);                         break;
     case 0x5d: BIT_N_R(3, gb->cpu.hl.l);                         break;
-    case 0x5e: BIT_N_INDIRECT_HL(3);                                break;
+    case 0x5e: BIT_N_INDIRECT_HL(3);                             break;
     case 0x5f: BIT_N_R(3, gb->cpu.af.a);                         break;
     case 0x60: BIT_N_R(4, gb->cpu.bc.b);                         break;
     case 0x61: BIT_N_R(4, gb->cpu.bc.c);                         break;
@@ -1054,7 +1026,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x63: BIT_N_R(4, gb->cpu.de.e);                         break;
     case 0x64: BIT_N_R(4, gb->cpu.hl.h);                         break;
     case 0x65: BIT_N_R(4, gb->cpu.hl.l);                         break;
-    case 0x66: BIT_N_INDIRECT_HL(4);                                break;
+    case 0x66: BIT_N_INDIRECT_HL(4);                             break;
     case 0x67: BIT_N_R(4, gb->cpu.af.a);                         break;
     case 0x68: BIT_N_R(5, gb->cpu.bc.b);                         break;
     case 0x69: BIT_N_R(5, gb->cpu.bc.c);                         break;
@@ -1062,7 +1034,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x6b: BIT_N_R(5, gb->cpu.de.e);                         break;
     case 0x6c: BIT_N_R(5, gb->cpu.hl.h);                         break;
     case 0x6d: BIT_N_R(5, gb->cpu.hl.l);                         break;
-    case 0x6e: BIT_N_INDIRECT_HL(5);                                break;
+    case 0x6e: BIT_N_INDIRECT_HL(5);                             break;
     case 0x6f: BIT_N_R(5, gb->cpu.af.a);                         break;
     case 0x70: BIT_N_R(6, gb->cpu.bc.b);                         break;
     case 0x71: BIT_N_R(6, gb->cpu.bc.c);                         break;
@@ -1070,7 +1042,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x73: BIT_N_R(6, gb->cpu.de.e);                         break;
     case 0x74: BIT_N_R(6, gb->cpu.hl.h);                         break;
     case 0x75: BIT_N_R(6, gb->cpu.hl.l);                         break;
-    case 0x76: BIT_N_INDIRECT_HL(6);                                break;
+    case 0x76: BIT_N_INDIRECT_HL(6);                             break;
     case 0x77: BIT_N_R(6, gb->cpu.af.a);                         break;
     case 0x78: BIT_N_R(7, gb->cpu.bc.b);                         break;
     case 0x79: BIT_N_R(7, gb->cpu.bc.c);                         break;
@@ -1078,7 +1050,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x7b: BIT_N_R(7, gb->cpu.de.e);                         break;
     case 0x7c: BIT_N_R(7, gb->cpu.hl.h);                         break;
     case 0x7d: BIT_N_R(7, gb->cpu.hl.l);                         break;
-    case 0x7e: BIT_N_INDIRECT_HL(7);                                break;
+    case 0x7e: BIT_N_INDIRECT_HL(7);                             break;
     case 0x7f: BIT_N_R(7, gb->cpu.af.a);                         break;
     case 0x80: RES_N_R(0, gb->cpu.bc.b);                         break;
     case 0x81: RES_N_R(0, gb->cpu.bc.c);                         break;
@@ -1086,7 +1058,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x83: RES_N_R(0, gb->cpu.de.e);                         break;
     case 0x84: RES_N_R(0, gb->cpu.hl.h);                         break;
     case 0x85: RES_N_R(0, gb->cpu.hl.l);                         break;
-    case 0x86: RES_N_INDIRECT_HL(0);                                break;
+    case 0x86: RES_N_INDIRECT_HL(0);                             break;
     case 0x87: RES_N_R(0, gb->cpu.af.a);                         break;
     case 0x88: RES_N_R(1, gb->cpu.bc.b);                         break;
     case 0x89: RES_N_R(1, gb->cpu.bc.c);                         break;
@@ -1094,7 +1066,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x8b: RES_N_R(1, gb->cpu.de.e);                         break;
     case 0x8c: RES_N_R(1, gb->cpu.hl.h);                         break;
     case 0x8d: RES_N_R(1, gb->cpu.hl.l);                         break;
-    case 0x8e: RES_N_INDIRECT_HL(1);                                break;
+    case 0x8e: RES_N_INDIRECT_HL(1);                             break;
     case 0x8f: RES_N_R(1, gb->cpu.af.a);                         break;
     case 0x90: RES_N_R(2, gb->cpu.bc.b);                         break;
     case 0x91: RES_N_R(2, gb->cpu.bc.c);                         break;
@@ -1102,7 +1074,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x93: RES_N_R(2, gb->cpu.de.e);                         break;
     case 0x94: RES_N_R(2, gb->cpu.hl.h);                         break;
     case 0x95: RES_N_R(2, gb->cpu.hl.l);                         break;
-    case 0x96: RES_N_INDIRECT_HL(2);                                break;
+    case 0x96: RES_N_INDIRECT_HL(2);                             break;
     case 0x97: RES_N_R(2, gb->cpu.af.a);                         break;
     case 0x98: RES_N_R(3, gb->cpu.bc.b);                         break;
     case 0x99: RES_N_R(3, gb->cpu.bc.c);                         break;
@@ -1110,7 +1082,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0x9b: RES_N_R(3, gb->cpu.de.e);                         break;
     case 0x9c: RES_N_R(3, gb->cpu.hl.h);                         break;
     case 0x9d: RES_N_R(3, gb->cpu.hl.l);                         break;
-    case 0x9e: RES_N_INDIRECT_HL(3);                                break;
+    case 0x9e: RES_N_INDIRECT_HL(3);                             break;
     case 0x9f: RES_N_R(3, gb->cpu.af.a);                         break;
     case 0xa0: RES_N_R(4, gb->cpu.bc.b);                         break;
     case 0xa1: RES_N_R(4, gb->cpu.bc.c);                         break;
@@ -1118,7 +1090,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xa3: RES_N_R(4, gb->cpu.de.e);                         break;
     case 0xa4: RES_N_R(4, gb->cpu.hl.h);                         break;
     case 0xa5: RES_N_R(4, gb->cpu.hl.l);                         break;
-    case 0xa6: RES_N_INDIRECT_HL(4);                                break;
+    case 0xa6: RES_N_INDIRECT_HL(4);                             break;
     case 0xa7: RES_N_R(4, gb->cpu.af.a);                         break;
     case 0xa8: RES_N_R(5, gb->cpu.bc.b);                         break;
     case 0xa9: RES_N_R(5, gb->cpu.bc.c);                         break;
@@ -1126,7 +1098,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xab: RES_N_R(5, gb->cpu.de.e);                         break;
     case 0xac: RES_N_R(5, gb->cpu.hl.h);                         break;
     case 0xad: RES_N_R(5, gb->cpu.hl.l);                         break;
-    case 0xae: RES_N_INDIRECT_HL(5);                                break;
+    case 0xae: RES_N_INDIRECT_HL(5);                             break;
     case 0xaf: RES_N_R(5, gb->cpu.af.a);                         break;
     case 0xb0: RES_N_R(6, gb->cpu.bc.b);                         break;
     case 0xb1: RES_N_R(6, gb->cpu.bc.c);                         break;
@@ -1134,7 +1106,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xb3: RES_N_R(6, gb->cpu.de.e);                         break;
     case 0xb4: RES_N_R(6, gb->cpu.hl.h);                         break;
     case 0xb5: RES_N_R(6, gb->cpu.hl.l);                         break;
-    case 0xb6: RES_N_INDIRECT_HL(6);                                break;
+    case 0xb6: RES_N_INDIRECT_HL(6);                             break;
     case 0xb7: RES_N_R(6, gb->cpu.af.a);                         break;
     case 0xb8: RES_N_R(7, gb->cpu.bc.b);                         break;
     case 0xb9: RES_N_R(7, gb->cpu.bc.c);                         break;
@@ -1142,7 +1114,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xbb: RES_N_R(7, gb->cpu.de.e);                         break;
     case 0xbc: RES_N_R(7, gb->cpu.hl.h);                         break;
     case 0xbd: RES_N_R(7, gb->cpu.hl.l);                         break;
-    case 0xbe: RES_N_INDIRECT_HL(7);                                break;
+    case 0xbe: RES_N_INDIRECT_HL(7);                             break;
     case 0xbf: RES_N_R(7, gb->cpu.af.a);                         break;
     case 0xc0: SET_N_R(0, gb->cpu.bc.b);                         break;
     case 0xc1: SET_N_R(0, gb->cpu.bc.c);                         break;
@@ -1150,7 +1122,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xc3: SET_N_R(0, gb->cpu.de.e);                         break;
     case 0xc4: SET_N_R(0, gb->cpu.hl.h);                         break;
     case 0xc5: SET_N_R(0, gb->cpu.hl.l);                         break;
-    case 0xc6: SET_N_INDIRECT_HL(0);                                break;
+    case 0xc6: SET_N_INDIRECT_HL(0);                             break;
     case 0xc7: SET_N_R(0, gb->cpu.af.a);                         break;
     case 0xc8: SET_N_R(1, gb->cpu.bc.b);                         break;
     case 0xc9: SET_N_R(1, gb->cpu.bc.c);                         break;
@@ -1158,7 +1130,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xcb: SET_N_R(1, gb->cpu.de.e);                         break;
     case 0xcc: SET_N_R(1, gb->cpu.hl.h);                         break;
     case 0xcd: SET_N_R(1, gb->cpu.hl.l);                         break;
-    case 0xce: SET_N_INDIRECT_HL(1);                                break;
+    case 0xce: SET_N_INDIRECT_HL(1);                             break;
     case 0xcf: SET_N_R(1, gb->cpu.af.a);                         break;
     case 0xd0: SET_N_R(2, gb->cpu.bc.b);                         break;
     case 0xd1: SET_N_R(2, gb->cpu.bc.c);                         break;
@@ -1166,7 +1138,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xd3: SET_N_R(2, gb->cpu.de.e);                         break;
     case 0xd4: SET_N_R(2, gb->cpu.hl.h);                         break;
     case 0xd5: SET_N_R(2, gb->cpu.hl.l);                         break;
-    case 0xd6: SET_N_INDIRECT_HL(2);                                break;
+    case 0xd6: SET_N_INDIRECT_HL(2);                             break;
     case 0xd7: SET_N_R(2, gb->cpu.af.a);                         break;
     case 0xd8: SET_N_R(3, gb->cpu.bc.b);                         break;
     case 0xd9: SET_N_R(3, gb->cpu.bc.c);                         break;
@@ -1174,7 +1146,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xdb: SET_N_R(3, gb->cpu.de.e);                         break;
     case 0xdc: SET_N_R(3, gb->cpu.hl.h);                         break;
     case 0xdd: SET_N_R(3, gb->cpu.hl.l);                         break;
-    case 0xde: SET_N_INDIRECT_HL(3);                                break;
+    case 0xde: SET_N_INDIRECT_HL(3);                             break;
     case 0xdf: SET_N_R(3, gb->cpu.af.a);                         break;
     case 0xe0: SET_N_R(4, gb->cpu.bc.b);                         break;
     case 0xe1: SET_N_R(4, gb->cpu.bc.c);                         break;
@@ -1182,7 +1154,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xe3: SET_N_R(4, gb->cpu.de.e);                         break;
     case 0xe4: SET_N_R(4, gb->cpu.hl.h);                         break;
     case 0xe5: SET_N_R(4, gb->cpu.hl.l);                         break;
-    case 0xe6: SET_N_INDIRECT_HL(4);                                break;
+    case 0xe6: SET_N_INDIRECT_HL(4);                             break;
     case 0xe7: SET_N_R(4, gb->cpu.af.a);                         break;
     case 0xe8: SET_N_R(5, gb->cpu.bc.b);                         break;
     case 0xe9: SET_N_R(5, gb->cpu.bc.c);                         break;
@@ -1190,7 +1162,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xeb: SET_N_R(5, gb->cpu.de.e);                         break;
     case 0xec: SET_N_R(5, gb->cpu.hl.h);                         break;
     case 0xed: SET_N_R(5, gb->cpu.hl.l);                         break;
-    case 0xee: SET_N_INDIRECT_HL(5);                                break;
+    case 0xee: SET_N_INDIRECT_HL(5);                             break;
     case 0xef: SET_N_R(5, gb->cpu.af.a);                         break;
     case 0xf0: SET_N_R(6, gb->cpu.bc.b);                         break;
     case 0xf1: SET_N_R(6, gb->cpu.bc.c);                         break;
@@ -1198,7 +1170,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xf3: SET_N_R(6, gb->cpu.de.e);                         break;
     case 0xf4: SET_N_R(6, gb->cpu.hl.h);                         break;
     case 0xf5: SET_N_R(6, gb->cpu.hl.l);                         break;
-    case 0xf6: SET_N_INDIRECT_HL(6);                                break;
+    case 0xf6: SET_N_INDIRECT_HL(6);                             break;
     case 0xf7: SET_N_R(6, gb->cpu.af.a);                         break;
     case 0xf8: SET_N_R(7, gb->cpu.bc.b);                         break;
     case 0xf9: SET_N_R(7, gb->cpu.bc.c);                         break;
@@ -1206,7 +1178,7 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
     case 0xfb: SET_N_R(7, gb->cpu.de.e);                         break;
     case 0xfc: SET_N_R(7, gb->cpu.hl.h);                         break;
     case 0xfd: SET_N_R(7, gb->cpu.hl.l);                         break;
-    case 0xfe: SET_N_INDIRECT_HL(7);                                break;
+    case 0xfe: SET_N_INDIRECT_HL(7);                             break;
     case 0xff: SET_N_R(7, gb->cpu.af.a);                         break;
     default:
         break;
@@ -1216,408 +1188,473 @@ int execute_cb_instructions(struct gb *gb, uint8_t opcode)
 
 void sm83_step(struct gb *gb)
 {
-    uint8_t opcode, a;
+    uint8_t opcode, a, msb, lsb;
     uint16_t operand, res, carry_per_bit;
+    bool old_edge, new_edge;
 
     gb->executed_cycle = 0;
-
-        opcode = sm83_fetch_byte(gb);
-        gb->executed_cycle += instr_cycle[opcode];
-        switch (opcode) {
-        case 0x00:                                                          break;
-        case 0x01: gb->cpu.bc.val = sm83_fetch_word(gb);                   break;
-        case 0x02: bus_write(gb, gb->cpu.bc.val, gb->cpu.af.a);          break;
-        case 0x03: INC_RR(gb->cpu.bc.val);                            break;
-        case 0x04: INC_R(gb->cpu.bc.b);                              break;
-        case 0x05: DEC_R(gb->cpu.bc.b);                              break;
-        case 0x06: gb->cpu.bc.b = sm83_fetch_byte(gb);                    break;
-        case 0x07: RLCA();                                                break;
-        case 0x08: 
-            operand = sm83_fetch_word(gb);
-            LD_INDIRECT_NN_SP(operand);
-            break;
-        case 0x09: ADD_HL_RR(gb->cpu.bc.val);                          break;
-        case 0x0a: gb->cpu.af.a = bus_read(gb, gb->cpu.bc.val);          break;
-        case 0x0b: DEC_RR(gb->cpu.bc.val);                            break;
-        case 0x0c: INC_R(gb->cpu.bc.c);                              break;
-        case 0x0d: DEC_R(gb->cpu.bc.c);                              break;
-        case 0x0e: gb->cpu.bc.c = sm83_fetch_byte(gb);                    break;
-        case 0x0f: RRCA();                                                break;
-        case 0x10:                                                 break;
-        case 0x11: gb->cpu.de.val = sm83_fetch_word(gb);                   break;
-        case 0x12: bus_write(gb, gb->cpu.de.val, gb->cpu.af.a);          break;
-        case 0x13: INC_RR(gb->cpu.de.val);                            break;
-        case 0x14: INC_R(gb->cpu.de.d);                              break;
-        case 0x15: DEC_R(gb->cpu.de.d);                              break;
-        case 0x16: gb->cpu.de.d = sm83_fetch_byte(gb);                    break;
-        case 0x17: RLA();                                                 break;
-        case 0x18: 
-            operand = sm83_fetch_byte(gb);
-            JP(gb->cpu.pc, operand, 1);
-            break;
-        case 0x19: ADD_HL_RR(gb->cpu.de.val);                          break;
-        case 0x1a: gb->cpu.af.a = bus_read(gb, gb->cpu.de.val);          break;
-        case 0x1b: DEC_RR(gb->cpu.de.val);                            break;
-        case 0x1c: INC_R(gb->cpu.de.e);                              break;
-        case 0x1d: DEC_R(gb->cpu.de.e);                              break;
-        case 0x1e: gb->cpu.de.e = sm83_fetch_byte(gb);                    break;
-        case 0x1f: RRA();                                                 break;
-        case 0x20: 
-            operand = sm83_fetch_byte(gb);
-            JP(gb->cpu.pc, operand, !gb->cpu.af.flag.z);
-            break;
-        case 0x21: gb->cpu.hl.val = sm83_fetch_word(gb);                   break;
-        case 0x22: bus_write(gb, gb->cpu.hl.val++, gb->cpu.af.a);        break;
-        case 0x23: INC_RR(gb->cpu.hl.val);                            break;
-        case 0x24: INC_R(gb->cpu.hl.h);                              break;
-        case 0x25: DEC_R(gb->cpu.hl.h);                              break;
-        case 0x26: gb->cpu.hl.h = sm83_fetch_byte(gb);                    break;
-        case 0x27: DAA();                                                 break;
-        case 0x28: 
-            operand = sm83_fetch_byte(gb);
-            JP(gb->cpu.pc, operand, gb->cpu.af.flag.z);
-            break;
-        case 0x29: ADD_HL_RR(gb->cpu.hl.val);                          break;
-        case 0x2a: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val++);        break;
-        case 0x2b: DEC_RR(gb->cpu.hl.val);                            break;
-        case 0x2c: INC_R(gb->cpu.hl.l);                              break;
-        case 0x2d: DEC_R(gb->cpu.hl.l);                              break;
-        case 0x2e: gb->cpu.hl.l = sm83_fetch_byte(gb);                    break;
-        case 0x2f: CPL();                                                 break;
-        case 0x30:
-            operand = sm83_fetch_byte(gb);
-            JP(gb->cpu.pc, operand, !gb->cpu.af.flag.c);
-            break;
-        case 0x31: gb->cpu.sp = sm83_fetch_word(gb);                   break;
-        case 0x32: bus_write(gb, gb->cpu.hl.val--, gb->cpu.af.a);        break;
-        case 0x33: INC_RR(gb->cpu.sp);                            break;
-        case 0x34: INC_INDIRECT_HL();                                     break;
-        case 0x35: DEC_INDIRECT_HL();                                     break;
-        case 0x36: 
-            operand = sm83_fetch_byte(gb);
-            LD_INDIRECT_HL_N(operand);
-            break;
-        case 0x37: SCF();                                                 break;
-        case 0x38:
-            operand = sm83_fetch_byte(gb);
-            JP(gb->cpu.pc, operand, gb->cpu.af.flag.c);
-            break;
-        case 0x39: ADD_HL_RR(gb->cpu.sp);                          break;
-        case 0x3a: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val--);        break;
-        case 0x3b: DEC_RR(gb->cpu.sp);                            break;
-        case 0x3c: INC_R(gb->cpu.af.a);                              break;
-        case 0x3d: DEC_R(gb->cpu.af.a);                              break;
-        case 0x3e: gb->cpu.af.a = sm83_fetch_byte(gb);                    break;
-        case 0x3f: CCF();                                                 break;
-        case 0x40: gb->cpu.bc.b = gb->cpu.bc.b;                         break;
-        case 0x41: gb->cpu.bc.b = gb->cpu.bc.c;                         break;
-        case 0x42: gb->cpu.bc.b = gb->cpu.de.d;                         break;
-        case 0x43: gb->cpu.bc.b = gb->cpu.de.e;                         break;
-        case 0x44: gb->cpu.bc.b = gb->cpu.hl.h;                         break;
-        case 0x45: gb->cpu.bc.b = gb->cpu.hl.l;                         break;
-        case 0x46: gb->cpu.bc.b = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x47: gb->cpu.bc.b = gb->cpu.af.a;                         break;
-        case 0x48: gb->cpu.bc.c = gb->cpu.bc.b;                         break;
-        case 0x49: gb->cpu.bc.c = gb->cpu.bc.c;                         break;
-        case 0x4a: gb->cpu.bc.c = gb->cpu.de.d;                         break;
-        case 0x4b: gb->cpu.bc.c = gb->cpu.de.e;                         break;
-        case 0x4c: gb->cpu.bc.c = gb->cpu.hl.h;                         break;
-        case 0x4d: gb->cpu.bc.c = gb->cpu.hl.l;                         break;
-        case 0x4e: gb->cpu.bc.c = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x4f: gb->cpu.bc.c = gb->cpu.af.a;                         break;
-        case 0x50: gb->cpu.de.d = gb->cpu.bc.b;                         break;
-        case 0x51: gb->cpu.de.d = gb->cpu.bc.c;                         break;
-        case 0x52: gb->cpu.de.d = gb->cpu.de.d;                         break;
-        case 0x53: gb->cpu.de.d = gb->cpu.de.e;                         break;
-        case 0x54: gb->cpu.de.d = gb->cpu.hl.h;                         break;
-        case 0x55: gb->cpu.de.d = gb->cpu.hl.l;                         break;
-        case 0x56: gb->cpu.de.d = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x57: gb->cpu.de.d = gb->cpu.af.a;                         break;
-        case 0x58: gb->cpu.de.e = gb->cpu.bc.b;                         break;
-        case 0x59: gb->cpu.de.e = gb->cpu.bc.c;                         break;
-        case 0x5a: gb->cpu.de.e = gb->cpu.de.d;                         break;
-        case 0x5b: gb->cpu.de.e = gb->cpu.de.e;                         break;
-        case 0x5c: gb->cpu.de.e = gb->cpu.hl.h;                         break;
-        case 0x5d: gb->cpu.de.e = gb->cpu.hl.l;                         break;
-        case 0x5e: gb->cpu.de.e = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x5f: gb->cpu.de.e = gb->cpu.af.a;                         break;
-        case 0x60: gb->cpu.hl.h = gb->cpu.bc.b;                         break;
-        case 0x61: gb->cpu.hl.h = gb->cpu.bc.c;                         break;
-        case 0x62: gb->cpu.hl.h = gb->cpu.de.d;                         break;
-        case 0x63: gb->cpu.hl.h = gb->cpu.de.e;                         break;
-        case 0x64: gb->cpu.hl.h = gb->cpu.hl.h;                         break;
-        case 0x65: gb->cpu.hl.h = gb->cpu.hl.l;                         break;
-        case 0x66: gb->cpu.hl.h = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x67: gb->cpu.hl.h = gb->cpu.af.a;                         break;
-        case 0x68: gb->cpu.hl.l = gb->cpu.bc.b;                         break;
-        case 0x69: gb->cpu.hl.l = gb->cpu.bc.c;                         break;
-        case 0x6a: gb->cpu.hl.l = gb->cpu.de.d;                         break;
-        case 0x6b: gb->cpu.hl.l = gb->cpu.de.e;                         break;
-        case 0x6c: gb->cpu.hl.l = gb->cpu.hl.h;                         break;
-        case 0x6d: gb->cpu.hl.l = gb->cpu.hl.l;                         break;
-        case 0x6e: gb->cpu.hl.l = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x6f: gb->cpu.hl.l = gb->cpu.af.a;                         break;
-        case 0x70: bus_write(gb, gb->cpu.hl.val, gb->cpu.bc.b);          break;
-        case 0x71: bus_write(gb, gb->cpu.hl.val, gb->cpu.bc.c);          break;
-        case 0x72: bus_write(gb, gb->cpu.hl.val, gb->cpu.de.d);          break;
-        case 0x73: bus_write(gb, gb->cpu.hl.val, gb->cpu.de.e);          break;
-        case 0x74: bus_write(gb, gb->cpu.hl.val, gb->cpu.hl.h);          break;
-        case 0x75: bus_write(gb, gb->cpu.hl.val, gb->cpu.hl.l);          break;
-        case 0x76: HALT();                                                break;
-        case 0x77: bus_write(gb, gb->cpu.hl.val, gb->cpu.af.a);          break;
-        case 0x78: gb->cpu.af.a = gb->cpu.bc.b;                         break;
-        case 0x79: gb->cpu.af.a = gb->cpu.bc.c;                         break;
-        case 0x7a: gb->cpu.af.a = gb->cpu.de.d;                         break;
-        case 0x7b: gb->cpu.af.a = gb->cpu.de.e;                         break;
-        case 0x7c: gb->cpu.af.a = gb->cpu.hl.h;                         break;
-        case 0x7d: gb->cpu.af.a = gb->cpu.hl.l;                         break;
-        case 0x7e: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val);          break;
-        case 0x7f: gb->cpu.af.a = gb->cpu.af.a;                         break;
-        case 0x80: ADD(gb->cpu.bc.b, 0);                              break;
-        case 0x81: ADD(gb->cpu.bc.c, 0);                              break;
-        case 0x82: ADD(gb->cpu.de.d, 0);                              break;
-        case 0x83: ADD(gb->cpu.de.e, 0);                              break;
-        case 0x84: ADD(gb->cpu.hl.h, 0);                              break;
-        case 0x85: ADD(gb->cpu.hl.l, 0);                              break;
-        case 0x86: 
-            operand = bus_read(gb, gb->cpu.hl.val);
-            ADD(operand, 0);
-            break;
-        case 0x87: ADD(gb->cpu.af.a, 0);                              break;
-        case 0x88: ADD(gb->cpu.bc.b, gb->cpu.af.flag.c);            break;
-        case 0x89: ADD(gb->cpu.bc.c, gb->cpu.af.flag.c);            break;
-        case 0x8a: ADD(gb->cpu.de.d, gb->cpu.af.flag.c);            break;
-        case 0x8b: ADD(gb->cpu.de.e, gb->cpu.af.flag.c);            break;
-        case 0x8c: ADD(gb->cpu.hl.h, gb->cpu.af.flag.c);            break;
-        case 0x8d: ADD(gb->cpu.hl.l, gb->cpu.af.flag.c);            break;
-        case 0x8e: 
-            operand = bus_read(gb, gb->cpu.hl.val);
-            ADD(operand, gb->cpu.af.flag.c);
-            break;
-        case 0x8f: ADD(gb->cpu.af.a, gb->cpu.af.flag.c);            break;
-        case 0x90: SUB(gb->cpu.bc.b, 0);                              break;
-        case 0x91: SUB(gb->cpu.bc.c, 0);                              break;
-        case 0x92: SUB(gb->cpu.de.d, 0);                              break;
-        case 0x93: SUB(gb->cpu.de.e, 0);                              break;
-        case 0x94: SUB(gb->cpu.hl.h, 0);                              break;
-        case 0x95: SUB(gb->cpu.hl.l, 0);                              break;
-        case 0x96:
-            operand = bus_read(gb, gb->cpu.hl.val);
-            SUB(operand, 0);      
-            break;
-        case 0x97: SUB(gb->cpu.af.a, 0);                              break;
-        case 0x98: SUB(gb->cpu.bc.b, gb->cpu.af.flag.c);            break;
-        case 0x99: SUB(gb->cpu.bc.c, gb->cpu.af.flag.c);            break;
-        case 0x9a: SUB(gb->cpu.de.d, gb->cpu.af.flag.c);            break;
-        case 0x9b: SUB(gb->cpu.de.e, gb->cpu.af.flag.c);            break;
-        case 0x9c: SUB(gb->cpu.hl.h, gb->cpu.af.flag.c);            break;
-        case 0x9d: SUB(gb->cpu.hl.l, gb->cpu.af.flag.c);            break;
-        case 0x9e:
-            operand = bus_read(gb, gb->cpu.hl.val);
-            SUB(operand, gb->cpu.af.flag.c);
-            break;
-        case 0x9f: SUB(gb->cpu.af.a, gb->cpu.af.flag.c);            break;
-        case 0xa0: AND(gb->cpu.bc.b);                                 break;
-        case 0xa1: AND(gb->cpu.bc.c);                                 break;
-        case 0xa2: AND(gb->cpu.de.d);                                 break;
-        case 0xa3: AND(gb->cpu.de.e);                                 break;
-        case 0xa4: AND(gb->cpu.hl.h);                                 break;
-        case 0xa5: AND(gb->cpu.hl.l);                                 break;
-        case 0xa6: 
-            operand = bus_read(gb, gb->cpu.hl.val);
-            AND(operand);
-            break;
-        case 0xa7: AND(gb->cpu.af.a);                                 break;
-        case 0xa8: XOR(gb->cpu.bc.b);                                 break;
-        case 0xa9: XOR(gb->cpu.bc.c);                                 break;
-        case 0xaa: XOR(gb->cpu.de.d);                                 break;
-        case 0xab: XOR(gb->cpu.de.e);                                 break;
-        case 0xac: XOR(gb->cpu.hl.h);                                 break;
-        case 0xad: XOR(gb->cpu.hl.l);                                 break;
-        case 0xae: 
-            operand = bus_read(gb, gb->cpu.hl.val);
-            XOR(operand);
-            break;
-        case 0xaf: XOR(gb->cpu.af.a);                                 break;
-        case 0xb0: OR(gb->cpu.bc.b);                                  break;
-        case 0xb1: OR(gb->cpu.bc.c);                                  break;
-        case 0xb2: OR(gb->cpu.de.d);                                  break;
-        case 0xb3: OR(gb->cpu.de.e);                                  break;
-        case 0xb4: OR(gb->cpu.hl.h);                                  break;
-        case 0xb5: OR(gb->cpu.hl.l);                                  break;
-        case 0xb6: 
-            operand = bus_read(gb, gb->cpu.hl.val);
-            OR(operand);
-            break;
-        case 0xb7: OR(gb->cpu.af.a);                                  break;
-        case 0xb8: CP(gb->cpu.bc.b);                                  break;
-        case 0xb9: CP(gb->cpu.bc.c);                                  break;
-        case 0xba: CP(gb->cpu.de.d);                                  break;
-        case 0xbb: CP(gb->cpu.de.e);                                  break;
-        case 0xbc: CP(gb->cpu.hl.h);                                  break;
-        case 0xbd: CP(gb->cpu.hl.l);                                  break;
-        case 0xbe:
-            operand = bus_read(gb, gb->cpu.hl.val);
-            CP(operand);
-            break;
-        case 0xbf: CP(gb->cpu.af.a);                                  break;
-        case 0xc0: RET(opcode, !gb->cpu.af.flag.z);                   break;
-        case 0xc1: gb->cpu.bc.val = sm83_pop_word(gb);                     break;
-        case 0xc2: 
-            operand = sm83_fetch_word(gb);
-            JP(operand, 0, !gb->cpu.af.flag.z);
-            break;
-        case 0xc3: 
-            operand = sm83_fetch_word(gb);
-            JP(operand, 0, 1);
-            break; 
-        case 0xc4:
-            operand = sm83_fetch_word(gb);
-            CALL(operand, !gb->cpu.af.flag.z);
-            break;
-        case 0xc5: PUSH_RR(gb->cpu.bc.val);                            break;
-        case 0xc6: 
-            operand = sm83_fetch_byte(gb);
-            ADD(operand, 0);
-            break;
-        case 0xc7: RST_N(0x00);                                         break;
-        case 0xc8: RET(opcode, gb->cpu.af.flag.z);                    break;
-        case 0xc9: RET(opcode, 1);                                      break;
-        case 0xca: 
-            operand = sm83_fetch_word(gb);
-            JP(operand, 0, gb->cpu.af.flag.z);
-            break;
-        case 0xcb:
-            operand = sm83_fetch_byte(gb);
-            gb->executed_cycle = execute_cb_instructions(gb, operand);
-            break;
-        case 0xcc:
-            operand = sm83_fetch_word(gb);
-            CALL(operand, gb->cpu.af.flag.z);
-            break;
-        case 0xcd: 
-            operand = sm83_fetch_word(gb);
-            CALL(operand, 1);
-            break;
-        case 0xce: 
-            operand = sm83_fetch_byte(gb);
-            ADD(operand, gb->cpu.af.flag.c);
-            break;
-        case 0xcf: RST_N(0x08);                                         break;
-        case 0xd0: RET(opcode, !gb->cpu.af.flag.c);                   break;
-        case 0xd1: gb->cpu.de.val = sm83_pop_word(gb);                     break;
-        case 0xd2: 
-            operand = sm83_fetch_word(gb);
-            JP(operand, 0, !gb->cpu.af.flag.c);
-            break;
-        case 0xd4: 
-            operand = sm83_fetch_word(gb);
-            CALL(operand, !gb->cpu.af.flag.c);
-            break;
-        case 0xd5: PUSH_RR(gb->cpu.de.val);                            break;
-        case 0xd6:
-            operand = sm83_fetch_byte(gb);
-            SUB(operand, 0);
-            break;
-        case 0xd7: RST_N(0x10);                                         break;
-        case 0xd8: RET(opcode, gb->cpu.af.flag.c);                    break;
-        case 0xd9: RETI();                                                break;
-        case 0xda:
-            operand = sm83_fetch_word(gb);
-            JP(operand, 0, gb->cpu.af.flag.c);
-            break;
-        case 0xdc: 
-            operand = sm83_fetch_word(gb);
-            CALL(operand, gb->cpu.af.flag.c);
-            break;
-        case 0xde:
-            operand = sm83_fetch_byte(gb);
-            SUB(operand, gb->cpu.af.flag.c);
-            break;
-        case 0xdf: RST_N(0x18);                                         break;
-        case 0xe0: 
-            operand = sm83_fetch_byte(gb);
-            LDH_INDIRECT_N_A(operand);
-            break;
-        case 0xe1: gb->cpu.hl.val = sm83_pop_word(gb);                     break;
-        case 0xe2: LDH_INDIRECT_C_A();                                    break;
-        case 0xe5: PUSH_RR(gb->cpu.hl.val);                            break;
-        case 0xe6: 
-            operand = sm83_fetch_byte(gb);
-            AND(operand);
-            break;
-        case 0xe7: RST_N(0x20);                                         break;
-        case 0xe8: 
-            operand = sm83_fetch_byte(gb);
-            ADD_SP_I8(operand);
-            break;
-        case 0xe9: gb->cpu.pc = gb->cpu.hl.val;                       break;
-        case 0xea:
-            operand = sm83_fetch_word(gb);
-            bus_write(gb, operand, gb->cpu.af.a);
-            break;
-        case 0xee: 
-            operand = sm83_fetch_byte(gb);
-            XOR(operand);
-            break;
-        case 0xef: RST_N(0x28);                                         break;
-        case 0xf0: 
-            operand = sm83_fetch_byte(gb);
-            LDH_A_INDIRECT_N(operand);
-            break;
-        case 0xf1: 
-            operand = sm83_pop_word(gb);
-            gb->cpu.af.val = (operand & 0xfff0) & ~0x000f;
-            break;
-        case 0xf2: LDH_A_INDIRECT_C();                                    break;
-        case 0xf3: DI();                                                  break;
-        case 0xf5: PUSH_RR(gb->cpu.af.val);                            break;
-        case 0xf6:
-            operand = sm83_fetch_byte(gb);
-            OR(operand);
-            break;
-        case 0xf7: RST_N(0x30);                                         break;
-        case 0xf8: 
-            operand = sm83_fetch_byte(gb);
-            LD_HL_SP_PLUS_I8(operand);
-            break;
-        case 0xf9: gb->cpu.sp = gb->cpu.hl.val;         break;
-        case 0xfa: 
-            operand = sm83_fetch_word(gb);
-            gb->cpu.af.a = bus_read(gb, operand);
-            break;
-        case 0xfb: EI();                                                  break;
-        case 0xfe: 
-            operand = sm83_fetch_byte(gb);
-            CP(operand);
-            break;
-        case 0xff: RST_N(0x38);                                         break;
-        default:
-            printf("Unknown opcode 0x%02x\n", opcode);
-            break;
-        }
-    gb->executed_cycle += interrupt_process(gb);
-    
-    // let other components catch up with CPU
-    for (int j = 0; j < gb->executed_cycle * 4; j++) {
-        timer_tick(gb);
-        ppu_tick(gb);
+    opcode = (gb->mode == HALT) ? 0x00 : SM83_FETCH_BYTE();
+    gb->executed_cycle = gb->executed_cycle + instr_cycle[opcode] + ((gb->interrupt.interrupt_handled) ? 5 : 0);
+    switch (opcode) {
+    case 0x00:                                                          break;
+    case 0x01: gb->cpu.bc.val = sm83_fetch_word(gb);                    break;
+    case 0x02: bus_write(gb, gb->cpu.bc.val, gb->cpu.af.a);             break;
+    case 0x03: INC_RR(gb->cpu.bc.val);                                  break;
+    case 0x04: INC_R(gb->cpu.bc.b);                                     break;
+    case 0x05: DEC_R(gb->cpu.bc.b);                                     break;
+    case 0x06: gb->cpu.bc.b = SM83_FETCH_BYTE();                        break;
+    case 0x07: RLCA();                                                  break;
+    case 0x08: 
+        operand = sm83_fetch_word(gb);
+        LD_INDIRECT_NN_SP(operand);
+        break;
+    case 0x09: ADD_HL_RR(gb->cpu.bc.val);                               break;
+    case 0x0a: gb->cpu.af.a = bus_read(gb, gb->cpu.bc.val);             break;
+    case 0x0b: DEC_RR(gb->cpu.bc.val);                                  break;
+    case 0x0c: INC_R(gb->cpu.bc.c);                                     break;
+    case 0x0d: DEC_R(gb->cpu.bc.c);                                     break;
+    case 0x0e: gb->cpu.bc.c = SM83_FETCH_BYTE();                        break;
+    case 0x0f: RRCA();                                                  break;
+    case 0x10:                                                          break;
+    case 0x11: gb->cpu.de.val = sm83_fetch_word(gb);                    break;
+    case 0x12: bus_write(gb, gb->cpu.de.val, gb->cpu.af.a);             break;
+    case 0x13: INC_RR(gb->cpu.de.val);                                  break;
+    case 0x14: INC_R(gb->cpu.de.d);                                     break;
+    case 0x15: DEC_R(gb->cpu.de.d);                                     break;
+    case 0x16: gb->cpu.de.d = SM83_FETCH_BYTE();                        break;
+    case 0x17: RLA();                                                   break;
+    case 0x18: 
+        operand = SM83_FETCH_BYTE();
+        JP(gb->cpu.pc, operand, 1);
+        break;
+    case 0x19: ADD_HL_RR(gb->cpu.de.val);                               break;
+    case 0x1a: gb->cpu.af.a = bus_read(gb, gb->cpu.de.val);             break;
+    case 0x1b: DEC_RR(gb->cpu.de.val);                                  break;
+    case 0x1c: INC_R(gb->cpu.de.e);                                     break;
+    case 0x1d: DEC_R(gb->cpu.de.e);                                     break;
+    case 0x1e: gb->cpu.de.e = SM83_FETCH_BYTE();                        break;
+    case 0x1f: RRA();                                                   break;
+    case 0x20: 
+        operand = SM83_FETCH_BYTE();
+        JP(gb->cpu.pc, operand, !gb->cpu.af.flag.z);
+        break;
+    case 0x21: gb->cpu.hl.val = sm83_fetch_word(gb);                    break;
+    case 0x22: bus_write(gb, gb->cpu.hl.val++, gb->cpu.af.a);           break;
+    case 0x23: INC_RR(gb->cpu.hl.val);                                  break;
+    case 0x24: INC_R(gb->cpu.hl.h);                                     break;
+    case 0x25: DEC_R(gb->cpu.hl.h);                                     break;
+    case 0x26: gb->cpu.hl.h = SM83_FETCH_BYTE();                        break;
+    case 0x27: DAA();                                                   break;
+    case 0x28: 
+        operand = SM83_FETCH_BYTE();
+        JP(gb->cpu.pc, operand, gb->cpu.af.flag.z);
+        break;
+    case 0x29: ADD_HL_RR(gb->cpu.hl.val);                               break;
+    case 0x2a: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val++);           break;
+    case 0x2b: DEC_RR(gb->cpu.hl.val);                                  break;
+    case 0x2c: INC_R(gb->cpu.hl.l);                                     break;
+    case 0x2d: DEC_R(gb->cpu.hl.l);                                     break;
+    case 0x2e: gb->cpu.hl.l = SM83_FETCH_BYTE();                        break;
+    case 0x2f: CPL();                                                   break;
+    case 0x30:
+        operand = SM83_FETCH_BYTE();
+        JP(gb->cpu.pc, operand, !gb->cpu.af.flag.c);
+        break;
+    case 0x31: gb->cpu.sp = sm83_fetch_word(gb);                        break;
+    case 0x32: bus_write(gb, gb->cpu.hl.val--, gb->cpu.af.a);           break;
+    case 0x33: INC_RR(gb->cpu.sp);                                      break;
+    case 0x34: INC_INDIRECT_HL();                                       break;
+    case 0x35: DEC_INDIRECT_HL();                                       break;
+    case 0x36: 
+        operand = SM83_FETCH_BYTE();
+        LD_INDIRECT_HL_N(operand);
+        break;
+    case 0x37: SCF();                                                   break;
+    case 0x38:
+        operand = SM83_FETCH_BYTE();
+        JP(gb->cpu.pc, operand, gb->cpu.af.flag.c);
+        break;
+    case 0x39: ADD_HL_RR(gb->cpu.sp);                                   break;
+    case 0x3a: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val--);           break;
+    case 0x3b: DEC_RR(gb->cpu.sp);                                      break;
+    case 0x3c: INC_R(gb->cpu.af.a);                                     break;
+    case 0x3d: DEC_R(gb->cpu.af.a);                                     break;
+    case 0x3e: gb->cpu.af.a = SM83_FETCH_BYTE();                        break;
+    case 0x3f: CCF();                                                   break;
+    case 0x40: gb->cpu.bc.b = gb->cpu.bc.b;                             break;
+    case 0x41: gb->cpu.bc.b = gb->cpu.bc.c;                             break;
+    case 0x42: gb->cpu.bc.b = gb->cpu.de.d;                             break;
+    case 0x43: gb->cpu.bc.b = gb->cpu.de.e;                             break;
+    case 0x44: gb->cpu.bc.b = gb->cpu.hl.h;                             break;
+    case 0x45: gb->cpu.bc.b = gb->cpu.hl.l;                             break;
+    case 0x46: gb->cpu.bc.b = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x47: gb->cpu.bc.b = gb->cpu.af.a;                             break;
+    case 0x48: gb->cpu.bc.c = gb->cpu.bc.b;                             break;
+    case 0x49: gb->cpu.bc.c = gb->cpu.bc.c;                             break;
+    case 0x4a: gb->cpu.bc.c = gb->cpu.de.d;                             break;
+    case 0x4b: gb->cpu.bc.c = gb->cpu.de.e;                             break;
+    case 0x4c: gb->cpu.bc.c = gb->cpu.hl.h;                             break;
+    case 0x4d: gb->cpu.bc.c = gb->cpu.hl.l;                             break;
+    case 0x4e: gb->cpu.bc.c = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x4f: gb->cpu.bc.c = gb->cpu.af.a;                             break;
+    case 0x50: gb->cpu.de.d = gb->cpu.bc.b;                             break;
+    case 0x51: gb->cpu.de.d = gb->cpu.bc.c;                             break;
+    case 0x52: gb->cpu.de.d = gb->cpu.de.d;                             break;
+    case 0x53: gb->cpu.de.d = gb->cpu.de.e;                             break;
+    case 0x54: gb->cpu.de.d = gb->cpu.hl.h;                             break;
+    case 0x55: gb->cpu.de.d = gb->cpu.hl.l;                             break;
+    case 0x56: gb->cpu.de.d = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x57: gb->cpu.de.d = gb->cpu.af.a;                             break;
+    case 0x58: gb->cpu.de.e = gb->cpu.bc.b;                             break;
+    case 0x59: gb->cpu.de.e = gb->cpu.bc.c;                             break;
+    case 0x5a: gb->cpu.de.e = gb->cpu.de.d;                             break;
+    case 0x5b: gb->cpu.de.e = gb->cpu.de.e;                             break;
+    case 0x5c: gb->cpu.de.e = gb->cpu.hl.h;                             break;
+    case 0x5d: gb->cpu.de.e = gb->cpu.hl.l;                             break;
+    case 0x5e: gb->cpu.de.e = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x5f: gb->cpu.de.e = gb->cpu.af.a;                             break;
+    case 0x60: gb->cpu.hl.h = gb->cpu.bc.b;                             break;
+    case 0x61: gb->cpu.hl.h = gb->cpu.bc.c;                             break;
+    case 0x62: gb->cpu.hl.h = gb->cpu.de.d;                             break;
+    case 0x63: gb->cpu.hl.h = gb->cpu.de.e;                             break;
+    case 0x64: gb->cpu.hl.h = gb->cpu.hl.h;                             break;
+    case 0x65: gb->cpu.hl.h = gb->cpu.hl.l;                             break;
+    case 0x66: gb->cpu.hl.h = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x67: gb->cpu.hl.h = gb->cpu.af.a;                             break;
+    case 0x68: gb->cpu.hl.l = gb->cpu.bc.b;                             break;
+    case 0x69: gb->cpu.hl.l = gb->cpu.bc.c;                             break;
+    case 0x6a: gb->cpu.hl.l = gb->cpu.de.d;                             break;
+    case 0x6b: gb->cpu.hl.l = gb->cpu.de.e;                             break;
+    case 0x6c: gb->cpu.hl.l = gb->cpu.hl.h;                             break;
+    case 0x6d: gb->cpu.hl.l = gb->cpu.hl.l;                             break;
+    case 0x6e: gb->cpu.hl.l = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x6f: gb->cpu.hl.l = gb->cpu.af.a;                             break;
+    case 0x70: bus_write(gb, gb->cpu.hl.val, gb->cpu.bc.b);             break;
+    case 0x71: bus_write(gb, gb->cpu.hl.val, gb->cpu.bc.c);             break;
+    case 0x72: bus_write(gb, gb->cpu.hl.val, gb->cpu.de.d);             break;
+    case 0x73: bus_write(gb, gb->cpu.hl.val, gb->cpu.de.e);             break;
+    case 0x74: bus_write(gb, gb->cpu.hl.val, gb->cpu.hl.h);             break;
+    case 0x75: bus_write(gb, gb->cpu.hl.val, gb->cpu.hl.l);             break;
+    case 0x76: HALT();                                                  break;
+    case 0x77: bus_write(gb, gb->cpu.hl.val, gb->cpu.af.a);             break;
+    case 0x78: gb->cpu.af.a = gb->cpu.bc.b;                             break;
+    case 0x79: gb->cpu.af.a = gb->cpu.bc.c;                             break;
+    case 0x7a: gb->cpu.af.a = gb->cpu.de.d;                             break;
+    case 0x7b: gb->cpu.af.a = gb->cpu.de.e;                             break;
+    case 0x7c: gb->cpu.af.a = gb->cpu.hl.h;                             break;
+    case 0x7d: gb->cpu.af.a = gb->cpu.hl.l;                             break;
+    case 0x7e: gb->cpu.af.a = bus_read(gb, gb->cpu.hl.val);             break;
+    case 0x7f: gb->cpu.af.a = gb->cpu.af.a;                             break;
+    case 0x80: ADD(gb->cpu.bc.b, 0);                                    break;
+    case 0x81: ADD(gb->cpu.bc.c, 0);                                    break;
+    case 0x82: ADD(gb->cpu.de.d, 0);                                    break;
+    case 0x83: ADD(gb->cpu.de.e, 0);                                    break;
+    case 0x84: ADD(gb->cpu.hl.h, 0);                                    break;
+    case 0x85: ADD(gb->cpu.hl.l, 0);                                    break;
+    case 0x86: 
+        operand = bus_read(gb, gb->cpu.hl.val);
+        ADD(operand, 0);
+        break;
+    case 0x87: ADD(gb->cpu.af.a, 0);                                    break;
+    case 0x88: ADD(gb->cpu.bc.b, gb->cpu.af.flag.c);                    break;
+    case 0x89: ADD(gb->cpu.bc.c, gb->cpu.af.flag.c);                    break;
+    case 0x8a: ADD(gb->cpu.de.d, gb->cpu.af.flag.c);                    break;
+    case 0x8b: ADD(gb->cpu.de.e, gb->cpu.af.flag.c);                    break;
+    case 0x8c: ADD(gb->cpu.hl.h, gb->cpu.af.flag.c);                    break;
+    case 0x8d: ADD(gb->cpu.hl.l, gb->cpu.af.flag.c);                    break;
+    case 0x8e: 
+        operand = bus_read(gb, gb->cpu.hl.val);
+        ADD(operand, gb->cpu.af.flag.c);
+        break;
+    case 0x8f: ADD(gb->cpu.af.a, gb->cpu.af.flag.c);                    break;
+    case 0x90: SUB(gb->cpu.bc.b, 0);                                    break;
+    case 0x91: SUB(gb->cpu.bc.c, 0);                                    break;
+    case 0x92: SUB(gb->cpu.de.d, 0);                                    break;
+    case 0x93: SUB(gb->cpu.de.e, 0);                                    break;
+    case 0x94: SUB(gb->cpu.hl.h, 0);                                    break;
+    case 0x95: SUB(gb->cpu.hl.l, 0);                                    break;
+    case 0x96:
+        operand = bus_read(gb, gb->cpu.hl.val);
+        SUB(operand, 0);      
+        break;
+    case 0x97: SUB(gb->cpu.af.a, 0);                                    break;
+    case 0x98: SUB(gb->cpu.bc.b, gb->cpu.af.flag.c);                    break;
+    case 0x99: SUB(gb->cpu.bc.c, gb->cpu.af.flag.c);                    break;
+    case 0x9a: SUB(gb->cpu.de.d, gb->cpu.af.flag.c);                    break;
+    case 0x9b: SUB(gb->cpu.de.e, gb->cpu.af.flag.c);                    break;
+    case 0x9c: SUB(gb->cpu.hl.h, gb->cpu.af.flag.c);                    break;
+    case 0x9d: SUB(gb->cpu.hl.l, gb->cpu.af.flag.c);                    break;
+    case 0x9e:
+        operand = bus_read(gb, gb->cpu.hl.val);
+        SUB(operand, gb->cpu.af.flag.c);
+        break;
+    case 0x9f: SUB(gb->cpu.af.a, gb->cpu.af.flag.c);                    break;
+    case 0xa0: AND(gb->cpu.bc.b);                                       break;
+    case 0xa1: AND(gb->cpu.bc.c);                                       break;
+    case 0xa2: AND(gb->cpu.de.d);                                       break;
+    case 0xa3: AND(gb->cpu.de.e);                                       break;
+    case 0xa4: AND(gb->cpu.hl.h);                                       break;
+    case 0xa5: AND(gb->cpu.hl.l);                                       break;
+    case 0xa6: 
+        operand = bus_read(gb, gb->cpu.hl.val);
+        AND(operand);
+        break;
+    case 0xa7: AND(gb->cpu.af.a);                                       break;
+    case 0xa8: XOR(gb->cpu.bc.b);                                       break;
+    case 0xa9: XOR(gb->cpu.bc.c);                                       break;
+    case 0xaa: XOR(gb->cpu.de.d);                                       break;
+    case 0xab: XOR(gb->cpu.de.e);                                       break;
+    case 0xac: XOR(gb->cpu.hl.h);                                       break;
+    case 0xad: XOR(gb->cpu.hl.l);                                       break;
+    case 0xae: 
+        operand = bus_read(gb, gb->cpu.hl.val);
+        XOR(operand);
+        break;
+    case 0xaf: XOR(gb->cpu.af.a);                                       break;
+    case 0xb0: OR(gb->cpu.bc.b);                                        break;
+    case 0xb1: OR(gb->cpu.bc.c);                                        break;
+    case 0xb2: OR(gb->cpu.de.d);                                        break;
+    case 0xb3: OR(gb->cpu.de.e);                                        break;
+    case 0xb4: OR(gb->cpu.hl.h);                                        break;
+    case 0xb5: OR(gb->cpu.hl.l);                                        break;
+    case 0xb6: 
+        operand = bus_read(gb, gb->cpu.hl.val);
+        OR(operand);
+        break;
+    case 0xb7: OR(gb->cpu.af.a);                                        break;
+    case 0xb8: CP(gb->cpu.bc.b);                                        break;
+    case 0xb9: CP(gb->cpu.bc.c);                                        break;
+    case 0xba: CP(gb->cpu.de.d);                                        break;
+    case 0xbb: CP(gb->cpu.de.e);                                        break;
+    case 0xbc: CP(gb->cpu.hl.h);                                        break;
+    case 0xbd: CP(gb->cpu.hl.l);                                        break;
+    case 0xbe:
+        operand = bus_read(gb, gb->cpu.hl.val);
+        CP(operand);
+        break;
+    case 0xbf: CP(gb->cpu.af.a);                                        break;
+    case 0xc0: RET(opcode, !gb->cpu.af.flag.z);                         break;
+    case 0xc1: gb->cpu.bc.val = sm83_pop_word(gb);                      break;
+    case 0xc2: 
+        operand = sm83_fetch_word(gb);
+        JP(operand, 0, !gb->cpu.af.flag.z);
+        break;
+    case 0xc3: 
+        operand = sm83_fetch_word(gb);
+        JP(operand, 0, 1);
+        break; 
+    case 0xc4:
+        operand = sm83_fetch_word(gb);
+        CALL(operand, !gb->cpu.af.flag.z);
+        break;
+    case 0xc5: PUSH_RR(gb->cpu.bc.val);                                 break;
+    case 0xc6: 
+        operand = SM83_FETCH_BYTE();
+        ADD(operand, 0);
+        break;
+    case 0xc7: RST_N(0x00);                                             break;
+    case 0xc8: RET(opcode, gb->cpu.af.flag.z);                          break;
+    case 0xc9: RET(opcode, 1);                                          break;
+    case 0xca: 
+        operand = sm83_fetch_word(gb);
+        JP(operand, 0, gb->cpu.af.flag.z);
+        break;
+    case 0xcb:
+        operand = SM83_FETCH_BYTE();
+        gb->executed_cycle += execute_cb_instructions(gb, operand);
+        break;
+    case 0xcc:
+        operand = sm83_fetch_word(gb);
+        CALL(operand, gb->cpu.af.flag.z);
+        break;
+    case 0xcd: 
+        operand = sm83_fetch_word(gb);
+        CALL(operand, 1);
+        break;
+    case 0xce: 
+        operand = SM83_FETCH_BYTE();
+        ADD(operand, gb->cpu.af.flag.c);
+        break;
+    case 0xcf: RST_N(0x08);                                             break;
+    case 0xd0: RET(opcode, !gb->cpu.af.flag.c);                         break;
+    case 0xd1: gb->cpu.de.val = sm83_pop_word(gb);                      break;
+    case 0xd2: 
+        operand = sm83_fetch_word(gb);
+        JP(operand, 0, !gb->cpu.af.flag.c);
+        break;
+    case 0xd4: 
+        operand = sm83_fetch_word(gb);
+        CALL(operand, !gb->cpu.af.flag.c);
+        break;
+    case 0xd5: PUSH_RR(gb->cpu.de.val);                                 break;
+    case 0xd6:
+        operand = SM83_FETCH_BYTE();
+        SUB(operand, 0);
+        break;
+    case 0xd7: RST_N(0x10);                                             break;
+    case 0xd8: RET(opcode, gb->cpu.af.flag.c);                          break;
+    case 0xd9: RETI();                                                  break;
+    case 0xda:
+        operand = sm83_fetch_word(gb);
+        JP(operand, 0, gb->cpu.af.flag.c);
+        break;
+    case 0xdc: 
+        operand = sm83_fetch_word(gb);
+        CALL(operand, gb->cpu.af.flag.c);
+        break;
+    case 0xde:
+        operand = SM83_FETCH_BYTE();
+        SUB(operand, gb->cpu.af.flag.c);
+        break;
+    case 0xdf: RST_N(0x18);                                             break;
+    case 0xe0: 
+        operand = SM83_FETCH_BYTE();
+        LDH_INDIRECT_N_A(operand);
+        break;
+    case 0xe1: gb->cpu.hl.val = sm83_pop_word(gb);                      break;
+    case 0xe2: LDH_INDIRECT_C_A();                                      break;
+    case 0xe5: PUSH_RR(gb->cpu.hl.val);                                 break;
+    case 0xe6: 
+        operand = SM83_FETCH_BYTE();
+        AND(operand);
+        break;
+    case 0xe7: RST_N(0x20);                                             break;
+    case 0xe8: 
+        operand = SM83_FETCH_BYTE();
+        ADD_SP_I8(operand);
+        break;
+    case 0xe9: gb->cpu.pc = gb->cpu.hl.val;                             break;
+    case 0xea:
+        operand = sm83_fetch_word(gb);
+        bus_write(gb, operand, gb->cpu.af.a);
+        break;
+    case 0xee: 
+        operand = SM83_FETCH_BYTE();
+        XOR(operand);
+        break;
+    case 0xef: RST_N(0x28);                                             break;
+    case 0xf0: 
+        operand = SM83_FETCH_BYTE();
+        LDH_A_INDIRECT_N(operand);
+        break;
+    case 0xf1: 
+        operand = sm83_pop_word(gb);
+        gb->cpu.af.val = (operand & 0xfff0) & ~0x000f;
+        break;
+    case 0xf2: LDH_A_INDIRECT_C();                                      break;
+    case 0xf3: DI();                                                    break;
+    case 0xf5: PUSH_RR(gb->cpu.af.val);                                 break;
+    case 0xf6:
+        operand = SM83_FETCH_BYTE();
+        OR(operand);
+        break;
+    case 0xf7: RST_N(0x30);                                             break;
+    case 0xf8: 
+        operand = SM83_FETCH_BYTE();
+        LD_HL_SP_PLUS_I8(operand);
+        break;
+    case 0xf9: gb->cpu.sp = gb->cpu.hl.val;                             break;
+    case 0xfa: 
+        operand = sm83_fetch_word(gb);
+        gb->cpu.af.a = bus_read(gb, operand);
+        break;
+    case 0xfb: EI();                                                    break;
+    case 0xfe: 
+        operand = SM83_FETCH_BYTE();
+        CP(operand);
+        break;
+    case 0xff: RST_N(0x38);                                             break;
+    default:
+        printf("Unknown opcode 0x%02x\n", opcode);
+        break;
     }
-        // apu_tick(gb);
+    
+    gb->timer.div += gb->executed_cycle * 4;
+    if ((gb->timer.div >= div_bit_to_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
+        if (gb->timer.tima == 0xff)
+            INTERRUPT_REQUEST(INTR_SRC_TIMER);
+        gb->timer.tima = (gb->timer.tima == 0xff) ? gb->timer.tma : gb->timer.tima + 1;
+    }
 
-        // deal with DMA
-        // if (gb->dma.mode == WAITING) {
-        //     gb->dma.mode = TRANSFERING;
-        // } else if (gb->dma.mode == TRANSFERING) {
-        //     gb->oam[dma] = dma_get_data(gb, gb->dma.start_addr + dma);
-        //     if (dma == 0x9f) {
-        //         gb->dma.mode = OFF;
-        //         dma = 0;
-        //     } else {
-        //         dma++;
-        //     }
-        // }
-    // inform that one scanline is ready
+    if (!gb->ppu.lcdc.ppu_enable)
+        return;
+    gb->ppu.ticks += gb->executed_cycle * 4;
+    if (gb->ppu.ly <= 143) {
+        if (gb->ppu.ticks <= 80) {
+            SET_MODE(OAM_SCAN);
+        } else if (gb->ppu.ticks <= 252) {
+            SET_MODE(DRAWING);
+        } else if (gb->ppu.ticks <= 456) {
+            SET_MODE(HBLANK);
+        }
+    }
+    if (gb->ppu.ticks > 456) {
+        gb->ppu.ticks -= 456;
+        if (gb->ppu.ly <= 143) {
+            // ppu_oam_scan
+            for (int i = 0; i < 40; i++) {
+                if (gb->oam[i * 4 + 1] > 0 && gb->ppu.oam_entry_cnt < 10 &&
+                    IN_RANGE(gb->ppu.ly, gb->oam[i * 4] - 16, gb->oam[i * 4] - 17 + gb->ppu.lcdc.obj_size)) {
+                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].y = gb->oam[i * 4];
+                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].x = gb->oam[i * 4 + 1];
+                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].tile_index = gb->oam[i * 4 + 2];
+                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].attributes.val = gb->oam[i * 4 + 3];
+                    gb->ppu.oam_entry_cnt++;
+                }
+                if (gb->ppu.oam_entry_cnt == 10)
+                    break;
+            }
+            qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
+
+            // draw the scanline
+            if (gb->ppu.ly <= 143) {
+                ppu_draw_scanline(gb);
+            }
+            SET_MODE(HBLANK);
+        }
+
+        // hblank & vblank handler
+        if (gb->ppu.mode == HBLANK) {
+            gb->ppu.ly++;
+            gb->ppu.stat_intr_src.val = 0;
+            gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
+            if (gb->ppu.ly == 144) {
+                SET_MODE(VBLANK);
+                if (gb->ppu.lcdc.ppu_enable)
+                    INTERRUPT_REQUEST(INTR_SRC_VBLANK);
+                gb->ppu.frame_ready = true;
+                gb->ppu.window_line_cnt = 0;
+                gb->ppu.draw_window_this_line = false;
+                gb->ppu.window_in_frame = false;
+            } else {
+                if (gb->ppu.wy == gb->ppu.ly && !gb->ppu.window_in_frame)
+                    gb->ppu.window_in_frame = true;
+                SET_MODE(OAM_SCAN);
+                if (gb->ppu.draw_window_this_line) {
+                    gb->ppu.window_line_cnt++;
+                    gb->ppu.draw_window_this_line = false;
+                }
+            }
+            gb->ppu.ticks = 0;
+            gb->ppu.oam_entry_cnt = 0;
+        } else if (gb->ppu.mode == VBLANK) {
+            if (gb->ppu.ly == 153) {
+                gb->ppu.ly = 0;
+                if (gb->ppu.wy == gb->ppu.ly && !gb->ppu.window_in_frame)
+                    gb->ppu.window_in_frame = true;
+                gb->ppu.oam_entry_cnt = 0;
+                SET_MODE(OAM_SCAN);
+                gb->ppu.stat_intr_src.val = 0;
+            } else {
+                gb->ppu.ly++;
+            }
+            gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
+            gb->ppu.ticks = 0;
+        }
+    }
+    if (gb->interrupt.ie & INTR_SRC_LCD)
+        ppu_check_stat_intr(gb);
+    interrupt_process(gb);
     gb->ppu.scan_line_ready = true;
 }
 
@@ -1654,27 +1691,6 @@ int cmpfunc(const void *a, const void *b)
     struct oam_entry *sb = (struct oam_entry *)b;
 
     return (sa->x - sb->x);
-}
-
-void ppu_oam_scan(struct gb *gb)
-{
-    if (gb->ppu.ticks == 80) {
-        uint8_t sprite_height = (gb->ppu.lcdc.obj_size) ? 16 : 8;
-        for (int i = 0; i < 40; i++) {
-            if (gb->oam[i * 4 + 1] > 0 && gb->ppu.oam_entry_cnt < 10 &&
-                IN_RANGE(gb->ppu.ly, gb->oam[i * 4] - 16, gb->oam[i * 4] - 17 + sprite_height)) {
-                gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].y = gb->oam[i * 4];
-                gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].x = gb->oam[i * 4 + 1];
-                gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].tile_index = gb->oam[i * 4 + 2];
-                gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].attributes.val = gb->oam[i * 4 + 3];
-                gb->ppu.oam_entry_cnt++;
-            }
-            if (gb->ppu.oam_entry_cnt == 10)
-                break;
-        }
-        qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
-        SET_MODE(DRAWING);
-    }
 }
 
 void ppu_draw_scanline(struct gb *gb)
@@ -1745,20 +1761,10 @@ set_frame_buffer:
     window_offset = 0;
 }
 
-void ppu_draw(struct gb *gb)
-{
-    if (gb->ppu.ticks == 252) {
-        ppu_draw_scanline(gb);
-        SET_MODE(HBLANK);
-    }
-}
-
 void ppu_check_stat_intr(struct gb *gb)
 {
     bool stat_intr_line = 0;
 
-    if (!(gb->interrupt.flag & INTR_SRC_LCD))
-        return;
     stat_intr_line = ((gb->ppu.stat.mode0_int_select && gb->ppu.stat.ppu_mode == HBLANK) ||
         (gb->ppu.stat.mode1_int_select && gb->ppu.stat.ppu_mode == VBLANK) ||
         (gb->ppu.stat.mode2_int_select && gb->ppu.stat.ppu_mode == OAM_SCAN) || 
@@ -1766,66 +1772,6 @@ void ppu_check_stat_intr(struct gb *gb)
     if (!gb->ppu.stat_intr_line && stat_intr_line)
         INTERRUPT_REQUEST(INTR_SRC_LCD);
     gb->ppu.stat_intr_line = stat_intr_line;
-}
-
-void ppu_tick(struct gb *gb)
-{
-    if (!gb->ppu.lcdc.ppu_enable)
-        return;
-    gb->ppu.ticks++;
-    switch (gb->ppu.mode) {
-    case OAM_SCAN:
-        ppu_oam_scan(gb);
-        break;
-    case DRAWING:
-        ppu_draw(gb);
-        break;
-    case HBLANK:
-        if (gb->ppu.ticks == 456) {
-            gb->ppu.ly++;
-            gb->ppu.stat_intr_src.val = 0;
-            gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
-            if (gb->ppu.ly == 144) {
-                SET_MODE(VBLANK);
-                if (gb->ppu.lcdc.ppu_enable)
-                    INTERRUPT_REQUEST(INTR_SRC_VBLANK);
-                gb->ppu.frame_ready = true;
-                gb->ppu.window_line_cnt = 0;
-                gb->ppu.draw_window_this_line = false;
-                gb->ppu.window_in_frame = false;
-            } else {
-                if (gb->ppu.wy == gb->ppu.ly && !gb->ppu.window_in_frame)
-                    gb->ppu.window_in_frame = true;
-                SET_MODE(OAM_SCAN);
-                if (gb->ppu.draw_window_this_line) {
-                    gb->ppu.window_line_cnt++;
-                    gb->ppu.draw_window_this_line = false;
-                }
-            }
-            gb->ppu.ticks = 0;
-            gb->ppu.oam_entry_cnt = 0;
-        }
-        break;
-    case VBLANK:
-        if (gb->ppu.ticks == 456) {
-            if (gb->ppu.ly == 153) {
-                gb->ppu.ly = 0;
-                if (gb->ppu.wy == gb->ppu.ly && !gb->ppu.window_in_frame)
-                    gb->ppu.window_in_frame = true;
-                gb->ppu.oam_entry_cnt = 0;
-                SET_MODE(OAM_SCAN);
-                gb->ppu.stat_intr_src.val = 0;
-            } else {
-                gb->ppu.ly++;
-            }
-            gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
-            gb->ppu.ticks = 0;
-        }
-        break;
-    default:
-        break;
-    }
-    ppu_check_stat_intr(gb);
 }
 
 int interrupt_handler(struct gb *gb, uint8_t intr_src)
@@ -1837,43 +1783,32 @@ int interrupt_handler(struct gb *gb, uint8_t intr_src)
     return 5;
 }
 
-int interrupt_process(struct gb *gb)
+void interrupt_process(struct gb *gb)
 {
     int ret = 0;
     bool is_interrupt = IS_INTERRUPT_PENDING();
 
-    if (gb->cpu.ime && is_interrupt) {
+    if (is_interrupt)
+        gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
+    gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
+    if (gb->interrupt.interrupt_handled) {
         if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
-            ret += interrupt_handler(gb, INTR_SRC_VBLANK);
+            interrupt_handler(gb, INTR_SRC_VBLANK);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
-            ret += interrupt_handler(gb, INTR_SRC_LCD);
+            interrupt_handler(gb, INTR_SRC_LCD);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
-            ret += interrupt_handler(gb, INTR_SRC_TIMER);
+            interrupt_handler(gb, INTR_SRC_TIMER);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
-            ret += interrupt_handler(gb, INTR_SRC_SERIAL);
+            interrupt_handler(gb, INTR_SRC_SERIAL);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
-            ret += interrupt_handler(gb, INTR_SRC_JOYPAD);
+            interrupt_handler(gb, INTR_SRC_JOYPAD);
     }
-    return ret;
 }
 
 
 /**********************************************************************************************/
 /************************************* timer related parts ************************************/
 /**********************************************************************************************/
-
-void timer_tick(struct gb *gb)
-{
-    bool old_edge = gb->timer.old_edge, new_edge;
-
-    gb->timer.div++;
-    new_edge = gb->timer.old_edge =  BIT(gb->timer.div, div_bit_to_freq[gb->timer.tac.freq]);
-    if (gb->timer.tac.enable && (old_edge && !new_edge)) {
-        if (gb->timer.tima == 0xff)
-            INTERRUPT_REQUEST(INTR_SRC_TIMER);
-        gb->timer.tima = (gb->timer.tima == 0xff) ? gb->timer.tma : gb->timer.tima + 1;
-    } 
-}
 
 /**********************************************************************************************/
 /********************************** cartridge related parts ***********************************/
