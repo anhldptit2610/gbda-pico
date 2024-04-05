@@ -110,7 +110,7 @@ struct ili9341 {
 #define ILI9341_GMCTRP1         0xe0            /* positive gamma correction */
 #define ILI9341_GMCTRN1         0xe0            /* negative gamma correction */
 
-void ili9341_init(struct ili9341 *ili9341, spi_inst_t *spidev, uint clk_pin, uint sda_pin, uint cs_pin, uint rst_pin, uint rs_pin);
+void ili9341_init(struct ili9341 *ili9341, spi_inst_t *spidev, uint clk_pin, uint sda_pin, uint cs_pin, uint rst_pin, uint dc_pin);
 void ili9341_write_byte(struct ili9341 *ili9341, uint8_t byte, ILI9341_DC dc);
 void ili9341_select(struct ili9341 *ili9341);
 void ili9341_deselect(struct ili9341 *ili9341);
@@ -119,5 +119,7 @@ void ili9341_write_data(struct ili9341 *ili9341, uint8_t data);
 void ili9341_write_command(struct ili9341 *ili9341, uint8_t cmd);
 void ili9341_set_display_region(struct ili9341 *ili9341, uint16_t sp, uint16_t ep, uint16_t sc, uint16_t ec);
 void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint8_t *bitmap, int len);
+void ili9341_start_dma_transfer(struct ili9341 *ili9341);
+void ili9341_stop_dma_transfer(struct ili9341 *ili9341);
 void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap);
 void ili9341_draw_scanline_dma(struct ili9341 *ili9341, uint16_t *line);

@@ -21,8 +21,8 @@ add_executable(gbda-pico gbda-pico.c gbda-pico.h)
 target_include_directories(gbda-pico PUBLIC ${CMAKE_SOURCE_DIR}/lib/ili9341)
 target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/roms)
 
-target_link_libraries(gbda-pico ili9341)
-target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore hardware_timer)
+target_link_libraries(gbda-pico ili9341 m) 
+target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore hardware_timer hardware_sync)
 
 pico_enable_stdio_uart(gbda-pico 1)
 pico_enable_stdio_usb(gbda-pico 0)

@@ -72,12 +72,22 @@ void ili9341_draw_bitmap_plainspi(struct ili9341 *ili9341, uint8_t *bitmap, int 
     ili9341_write_command(ili9341, ILI9341_NOP);
 }
 
+void ili9341_draw_scanline_dma(struct ili9341 *ili9341, uint16_t *line)
+{
+    dma_channel_configure(ili9341->spi_dma, &ili9341->spi_dma_config,
+                        &spi_get_hw(ILI9341_SPI_PORT)->dr,
+                        line,
+                        160,
+                        true);
+    dma_channel_wait_for_finish_blocking(ili9341->spi_dma);
+}
+
 void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap)
 {
-    ili9341_write_command(ili9341, ILI9341_RAMWR);
-    ili9341_select(ili9341);
-    gpio_put(ili9341->dc_pin, DATA);
-    spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
+    // ili9341_write_command(ili9341, ILI9341_RAMWR);
+    // ili9341_select(ili9341);
+    // gpio_put(ili9341->dc_pin, DATA);
+    // spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
     dma_channel_configure(ili9341->spi_dma, &ili9341->spi_dma_config,
                         &spi_get_hw(ILI9341_SPI_PORT)->dr,       // write addr
                         bitmap,
@@ -85,6 +95,22 @@ void ili9341_draw_bitmap_dma(struct ili9341 *ili9341, uint16_t *bitmap)
                         //320 * 240 * 2,
                         true);
     dma_channel_wait_for_finish_blocking(ili9341->spi_dma);
+    // spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
+    // ili9341_deselect(ili9341);
+    // sleep_ms(1);
+    // ili9341_write_command(ili9341, ILI9341_NOP);
+}
+
+void ili9341_start_dma_transfer(struct ili9341 *ili9341)
+{
+    ili9341_write_command(ili9341, ILI9341_RAMWR);
+    ili9341_select(ili9341);
+    gpio_put(ili9341->dc_pin, DATA);
+    spi_set_format(ili9341->spidev, 16, 0, 0, SPI_MSB_FIRST);
+}
+
+void ili9341_stop_dma_transfer(struct ili9341 *ili9341)
+{
     spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
     ili9341_deselect(ili9341);
     sleep_ms(1);
@@ -95,10 +121,10 @@ void ili9341_init(struct ili9341 *ili9341, spi_inst_t *spidev, uint clk_pin, uin
 {
     ili9341->spidev = spidev;
     ili9341->clk_pin = clk_pin;
-    ili9341->cs_pin = cs_pin;
-    ili9341->dc_pin = dc_pin;
-    ili9341->rst_pin = rst_pin;
     ili9341->sda_pin = sda_pin;
+    ili9341->cs_pin = cs_pin;
+    ili9341->rst_pin = rst_pin;
+    ili9341->dc_pin = dc_pin;
 
     // do a hardware reset
     ili9341_reset(ili9341);
