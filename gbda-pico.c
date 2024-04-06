@@ -151,6 +151,7 @@ void core1_entry() {
     gpio_put(ILI9341_CS_PIN, 1);
     gpio_set_slew_rate(ILI9341_CLK_PIN, GPIO_SLEW_RATE_FAST);
     gpio_set_slew_rate(ILI9341_SDA_PIN, GPIO_SLEW_RATE_FAST);
+    hw_write_masked(&spi_get_hw(spi_default)->cr0, (1 - 1) << SPI_SSPCR0_SCR_LSB, SPI_SSPCR0_SCR_BITS);
 
     //grab a unused DMA channel and configure it
     ili9341.spi_dma = dma_claim_unused_channel(true);
@@ -171,17 +172,14 @@ void core1_entry() {
         rx.val = multicore_fifo_pop_blocking();
         switch (rx.cmd) {
         case CMD_DISPLAY_LINE:
-            printf("DMA transfering\n");
             ili9341_draw_bitmap_dma(&ili9341, gb.frame_buffer);
             break;
         case CMD_RESET:
             break;
         case CMD_START_DMA:
-            printf("start DMA transfering\n");
             ili9341_start_dma_transfer(&ili9341);
             break;
         case CMD_STOP_DMA:
-            printf("stop DMA transfering\n");
             ili9341_stop_dma_transfer(&ili9341);
             break;
         default:

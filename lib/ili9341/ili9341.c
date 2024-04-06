@@ -113,7 +113,7 @@ void ili9341_stop_dma_transfer(struct ili9341 *ili9341)
 {
     spi_set_format(ili9341->spidev, 8, 0, 0, SPI_MSB_FIRST);
     ili9341_deselect(ili9341);
-    sleep_ms(1);
+//    sleep_ms(1);
     ili9341_write_command(ili9341, ILI9341_NOP);
 }
 

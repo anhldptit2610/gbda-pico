@@ -248,19 +248,6 @@ struct oam_entry {
 
 struct ppu {
     bool frame_ready;
-    // union {
-    //     uint8_t val;
-    //     struct {
-    //         uint8_t bg_win_enable : 1;
-    //         uint8_t obj_enable : 1;
-    //         uint8_t obj_size : 1;
-    //         uint8_t bg_tile_map : 1;
-    //         uint8_t bg_win_tiles : 1;
-    //         uint8_t win_enable : 1;
-    //         uint8_t win_tile_map : 1;
-    //         uint8_t ppu_enable : 1;
-    //     };
-    // } lcdc;
 
     struct {
         uint8_t val;
@@ -291,9 +278,7 @@ struct ppu {
     uint8_t scx;
     uint8_t ly;
     uint8_t lyc;
-    uint8_t bgp;
-    uint8_t obp0;
-    uint8_t obp1;
+    uint8_t pal[3];
     uint8_t wy;
     uint8_t wx;
     uint16_t ticks;
@@ -502,6 +487,7 @@ void push_word(struct gb *gb, uint16_t val);
 /* interrupt declarations */
 uint8_t interrupt_read(struct gb *gb, uint16_t addr);
 void interrupt_write(struct gb *gb, uint16_t addr, uint8_t val);
+int interrupt_handler(struct gb *gb, uint8_t intr_src);
 void interrupt_process(struct gb *gb);
 void interrupt_request(struct gb *gb, uint8_t intr_src);
 bool is_interrupt_pending(struct gb *gb);
@@ -1195,7 +1181,7 @@ void sm83_step(struct gb *gb)
 {
     uint8_t opcode, a, msb, lsb;
     uint16_t operand, res, carry_per_bit;
-    bool old_edge, new_edge;
+    bool old_edge, new_edge, is_interrupt, stat_intr_line;
     static uint8_t dma_addr = 0;
 
     gb->executed_cycle = 0;
@@ -1674,35 +1660,61 @@ void sm83_step(struct gb *gb)
             gb->ppu.ticks = 0;
         }
     }
-    if (gb->interrupt.ie & INTR_SRC_LCD)
-        ppu_check_stat_intr(gb);
-    interrupt_process(gb);
-    gb->ppu.scan_line_ready = true;
+    if (gb->interrupt.ie & INTR_SRC_LCD) {
+        stat_intr_line = ((gb->ppu.stat.mode0_int_select && gb->ppu.stat.ppu_mode == HBLANK) ||
+        (gb->ppu.stat.mode1_int_select && gb->ppu.stat.ppu_mode == VBLANK) ||
+        (gb->ppu.stat.mode2_int_select && gb->ppu.stat.ppu_mode == OAM_SCAN) || 
+        (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
+        if (!gb->ppu.stat_intr_line && stat_intr_line)
+            INTERRUPT_REQUEST(INTR_SRC_LCD);
+        gb->ppu.stat_intr_line = stat_intr_line;
+    }
+//        ppu_check_stat_intr(gb);
+
+    /* deal with interrupt */
+    is_interrupt = IS_INTERRUPT_PENDING();
+    if (is_interrupt)
+        gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
+    gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
+    if (gb->interrupt.interrupt_handled) {
+        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
+            interrupt_handler(gb, INTR_SRC_VBLANK);
+        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
+            interrupt_handler(gb, INTR_SRC_LCD);
+        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
+            interrupt_handler(gb, INTR_SRC_TIMER);
+        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
+            interrupt_handler(gb, INTR_SRC_SERIAL);
+        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
+            interrupt_handler(gb, INTR_SRC_JOYPAD);
+    }
 }
 
 /**********************************************************************************************/
 /************************************* PPU related parts **************************************/
 /**********************************************************************************************/
 
-uint16_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
-{
-    uint32_t ret;
+#define GET_COLOR(which_pal, color_id)        \
+    palette[(gb->ppu.pal[(which_pal)] >> ((color_id) * 2)) & 0x03]
+// uint16_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
+// {
+//     uint32_t ret;
 
-    switch (pal) {
-    case BGP:
-        ret =  palette[(gb->ppu.bgp >> (color_id * 2)) & 0x03];
-        break;
-    case OBP0:
-        ret =  palette[(gb->ppu.obp0 >> (color_id * 2)) & 0x03];
-        break;
-    case OBP1:
-        ret =  palette[(gb->ppu.obp1 >> (color_id * 2)) & 0x03];
-        break;
-    default:
-        break;
-    }
-    return ret;
-}
+//     switch (pal) {
+//     case BGP:
+//         ret =  palette[(gb->ppu.bgp >> (color_id * 2)) & 0x03];
+//         break;
+//     case OBP0:
+//         ret =  palette[(gb->ppu.obp0 >> (color_id * 2)) & 0x03];
+//         break;
+//     case OBP1:
+//         ret =  palette[(gb->ppu.obp1 >> (color_id * 2)) & 0x03];
+//         break;
+//     default:
+//         break;
+//     }
+//     return ret;
+// }
 
 #define READ_VRAM(addr)         \
     gb->vram[addr - 0x8000]
@@ -1745,7 +1757,7 @@ void ppu_draw_scanline(struct gb *gb)
         color_id = color_id_low | (color_id_high << 1);
 set_frame_buffer:
         gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
-                                                                    ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
+                                                                    ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
         // gb->line_buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
         // gb->frame_buffer[i * 2 + gb->ppu.ly * 2 * SCREEN_WIDTH] = MSB(color);
         // gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * 2 * SCREEN_WIDTH] = LSB(color);
@@ -1776,7 +1788,7 @@ set_frame_buffer:
                 ((ptype == SPRITE) && (color_id > 0 && !sprite_color_id)))
                 continue;
             gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = 
-                            get_color_from_palette(gb, gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
+                            GET_COLOR(gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
             color_id = sprite_color_id;
             ptype = SPRITE;
         }
@@ -1808,7 +1820,6 @@ int interrupt_handler(struct gb *gb, uint8_t intr_src)
 
 void interrupt_process(struct gb *gb)
 {
-    int ret = 0;
     bool is_interrupt = IS_INTERRUPT_PENDING();
 
     if (is_interrupt)
@@ -1996,7 +2007,7 @@ void load_state_after_booting(struct gb *gb)
     ppu->scx = 0x00;
     ppu->ly = 0x00;
     ppu->lyc = 0x00;
-    ppu->bgp = 0xfc;
+    ppu->pal[BGP] = 0xfc;
     ppu->wy = 0x00;
     ppu->wx = 0x00;
     ppu->ticks = 0;
@@ -2222,13 +2233,13 @@ uint8_t bus_read(struct gb *gb, uint16_t addr)
                 ret = gb->ppu.lyc;
                 break; 
             case PPU_REG_BGP:
-                ret = gb->ppu.bgp;
+                ret = gb->ppu.pal[BGP];
                 break;
             case PPU_REG_OBP0:
-                ret = gb->ppu.obp0;
+                ret = gb->ppu.pal[OBP0];
                 break;
             case PPU_REG_OBP1:
-                ret = gb->ppu.obp1;
+                ret = gb->ppu.pal[OBP1];
                 break;
             case PPU_REG_WY:
                 ret = gb->ppu.wy;
@@ -2341,13 +2352,13 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
                     gb->ppu.stat.lyc_equal_ly = gb->ppu.lyc == gb->ppu.ly;
                     break; 
                 case PPU_REG_BGP:
-                    gb->ppu.bgp = val;
+                    gb->ppu.pal[BGP] = val;
                     break;
                 case PPU_REG_OBP0:
-                    gb->ppu.obp0 = val;
+                    gb->ppu.pal[OBP0] = val;
                     break;
                 case PPU_REG_OBP1:
-                    gb->ppu.obp1 = val;
+                    gb->ppu.pal[OBP1] = val;
                     break;
                 case PPU_REG_WY:
                     gb->ppu.wy = val;

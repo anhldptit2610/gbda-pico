@@ -24,6 +24,8 @@ target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/roms)
 target_link_libraries(gbda-pico ili9341 m) 
 target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore hardware_timer hardware_sync)
 
+pico_set_binary_type(gbda-pico no_flash)
+
 pico_enable_stdio_uart(gbda-pico 1)
 pico_enable_stdio_usb(gbda-pico 0)
 
