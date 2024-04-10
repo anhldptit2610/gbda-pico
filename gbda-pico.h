@@ -1594,7 +1594,6 @@ void sm83_step(struct gb *gb)
         printf("Unknown opcode 0x%02x\n", opcode);
         break;
     }
-
     /* timer handling */
     gb->timer.div += gb->executed_cycle * 4;
     if ((gb->timer.div >= tim_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
@@ -1729,8 +1728,10 @@ void sm83_step(struct gb *gb)
 /************************************* PPU related parts **************************************/
 /**********************************************************************************************/
 
-#define GET_COLOR(which_pal, color_id)        \
-    palette[(gb->ppu.pal[(which_pal)] >> ((color_id) * 2)) & 0x03]
+#define GET_COLOR(lo, hi)        \
+    ((lo) | ((hi) << 1))
+#define GET_COLOR_ID(which_pal, color_id)       \
+    (gb->ppu.pal[which_pal] >> ((color_id) * 2)) & 0x03
 
 #define READ_VRAM(addr)         \
     gb->vram[addr - 0x8000]
@@ -1745,11 +1746,16 @@ int cmpfunc(const void *a, const void *b)
 
 void ppu_draw_scanline(struct gb *gb)
 {
-    uint8_t tile_index, color_id_low, color_id_high, offset_x, offset_y, 
-            x_pos, y_pos, sprite_color_id, window_offset, non_window_range;
+    uint8_t tile_index, color_id_low, color_id_high, offset_x, offset_y, x_pos, y_pos, 
+            window_offset, non_window_range, color_id[SCREEN_WIDTH], color[SCREEN_WIDTH];
     bool window_in_line, pixel_type[SCREEN_WIDTH];
     uint16_t tile_map_addr, tile_addr;
-    uint8_t color_id[SCREEN_WIDTH];
+
+    // if LCDC bit 0 is disabled, no rendering bg and window
+    if (!gb->ppu.lcdc.bg_win_enable) {
+        memset(color, 0, SCREEN_WIDTH);
+        goto sprite;
+    }
 
     // we deal with window first
     window_offset = 0;
@@ -1760,8 +1766,10 @@ void ppu_draw_scanline(struct gb *gb)
                 tile_index = READ_VRAM(gb->ppu.lcdc.win_tile_map + ((window_offset / 8 + 32 * (gb->ppu.window_line_cnt / 8)) & 0x3ff));
                 tile_addr = (gb->ppu.lcdc.bg_win_tiles == 0x8000) ? 0x8000 + 16 * (uint8_t)tile_index : 0x9000 + 16 * (int8_t)tile_index;
             }
+            color_id_low = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2) >> (7 - (window_offset % 8))) & 0x01;
+            color_id_high = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2 + 1) >> (7 - (window_offset % 8))) & 0x01;
             color_id[i] = color_id_low | (color_id_high << 1);
-            gb->buffer_ptr->buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
+            color[i] = GET_COLOR_ID(BGP, color_id[i]);
             window_offset++;
         }
         window_offset = 0;
@@ -1771,10 +1779,6 @@ void ppu_draw_scanline(struct gb *gb)
     non_window_range = (gb->ppu.draw_window_this_line) ? gb->ppu.wx - 8 : SCREEN_WIDTH;
     offset_y = (gb->ppu.ly + gb->ppu.scy) & 0xff;
     for (int i = 0; i < non_window_range; i++) {
-        if (!gb->ppu.lcdc.bg_win_enable) {
-            gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = palette[0];
-            continue;
-        }
         offset_x = (i + gb->ppu.scx) & 0xff;
         if ((i % 8) == 0) {
             tile_index = READ_VRAM(gb->ppu.lcdc.bg_tile_map + ((offset_x / 8 + 32 * (offset_y / 8)) & 0x3ff));
@@ -1784,13 +1788,14 @@ void ppu_draw_scanline(struct gb *gb)
         color_id_low = (READ_VRAM(tile_addr + (offset_y % 8) * 2) >> (7 - (offset_x % 8))) & 0x01;
         color_id_high = (READ_VRAM(tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
         color_id[i] = color_id_low | (color_id_high << 1);
-        gb->buffer_ptr->buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
+        color[i] = GET_COLOR_ID(BGP, color_id[i]);
     }
 
+sprite:
     // finally, sprite
-    memset(pixel_type, SCREEN_WIDTH, BG);
+    memset(pixel_type, BG, SCREEN_WIDTH);
     if (!gb->ppu.lcdc.obj_enable || !gb->ppu.oam_entry_cnt)
-        return;
+        goto set_color;
     for (int i = gb->ppu.oam_entry_cnt - 1; i >= 0; i--) {
         tile_index = gb->ppu.oam_entry[i].tile_index;
         y_pos = (gb->ppu.ly - (gb->ppu.oam_entry[i].y - 16)) % 16;
@@ -1802,19 +1807,23 @@ void ppu_draw_scanline(struct gb *gb)
         tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
         uint8_t test = (!gb->ppu.oam_entry[i].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
         for (int j = gb->ppu.oam_entry[i].x - 8; j <= gb->ppu.oam_entry[i].x; j++) {
-            x_pos = j - (gb->ppu.oam_entry[i].x - 8);
-            offset_x = (gb->ppu.oam_entry[i].attributes.x_flip) ? x_pos : 7 - x_pos;
+            offset_x = (gb->ppu.oam_entry[i].attributes.x_flip) ? (j - (gb->ppu.oam_entry[i].x - 8)) : 7 - (j - (gb->ppu.oam_entry[i].x - 8));
             color_id_low = (READ_VRAM(tile_addr + (test) * 2) >> (offset_x)) & 0x01;
             color_id_high = (READ_VRAM(tile_addr + (test) * 2 + 1) >> (offset_x)) & 0x01;
-            sprite_color_id = color_id_low | (color_id_high << 1);
-            if (((pixel_type[j] == BG) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[i].attributes.priority && color_id[j] > 0))) ||
-                ((pixel_type[j] == SPRITE) && (color_id > 0 && !sprite_color_id)))
+            if (((pixel_type[j] == BG) && (!GET_COLOR(color_id_low, color_id_high) || (GET_COLOR(color_id_low, color_id_high) > 0 && 
+                gb->ppu.oam_entry[i].attributes.priority && color_id[j] > 0))) ||
+                ((pixel_type[j] == SPRITE) && (color_id[j] > 0 && !GET_COLOR(color_id_low, color_id_high))))
                 continue;
-            gb->buffer_ptr->buffer[j] = GET_COLOR(gb->ppu.oam_entry[i].attributes.dmg_palette, sprite_color_id);
-            color_id[j] = sprite_color_id;
+            color[j] = GET_COLOR_ID(gb->ppu.oam_entry[i].attributes.dmg_palette, GET_COLOR(color_id_low, color_id_high));
+            color_id[j] = GET_COLOR(color_id_low, color_id_high);
             pixel_type[j] = SPRITE;
         }
     }
+set_color:
+    spin_lock_unsafe_blocking(gb->buffer_ptr->lock);
+    for (int i = 0; i < 160; i++)
+        gb->buffer_ptr->buffer[i] = palette[color[i]];
+    spin_unlock_unsafe(gb->buffer_ptr->lock);
 }
 
 void ppu_check_stat_intr(struct gb *gb)
