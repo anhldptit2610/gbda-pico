@@ -4,9 +4,19 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
+#include "hardware/dma.h"
+#include "hardware/sync.h"
+#include "hardware/spi.h"
+#include "hardware/timer.h"
+#include "hardware/clocks.h"
+#include "pico/multicore.h"
+#include "ili9341.h"
+#include "tetris.h"
 
 #define SAMPLE_RATE             44100
 #define NUM_CHANNELS            2
@@ -66,6 +76,30 @@
 #define INTR_SRC_TIMER      (1U << 2)
 #define INTR_SRC_SERIAL     (1U << 3)
 #define INTR_SRC_JOYPAD     (1U << 4)
+
+enum CMD {
+    CMD_RESET,
+    CMD_DISPLAY_LINE,
+    CMD_START_DMA,
+    CMD_STOP_DMA,
+};
+
+typedef union command {
+    uint32_t val;
+    struct {
+        uint8_t cmd;
+        uint8_t ly;
+        uint8_t buffer;
+        uint8_t unused;
+    };
+} command_t; 
+
+struct pixel_buffer {
+    uint16_t buffer[SCREEN_WIDTH];
+    spin_lock_t *lock;
+    uint lock_num;
+    int code;
+};
 
 enum BUS_REGIONS {
     ROM = (1U << 0),
@@ -128,7 +162,7 @@ typedef enum {
 } palette_t;
 
 typedef enum {
-    BG_WIN,
+    BG,
     SPRITE,
 } pixel_type_t;
 
@@ -358,8 +392,8 @@ struct serial {
 };
 
 struct gb {
+    struct pixel_buffer *buffer_ptr;
     uint16_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
-    uint16_t line_buffer[SCREEN_WIDTH];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];
@@ -382,11 +416,11 @@ struct gb {
 
 const uint16_t palette[4] = {COLOR_WHITE, COLOR_LIGHTGRAY, COLOR_DARKGRAY, COLOR_BLACK};
 
-const uint8_t div_bit_to_freq[] = {
-    [0] = 7,
-    [1] = 1,
-    [2] = 3,
-    [3] = 5
+const uint8_t tim_freq[] = {
+    [0] = 1024,
+    [1] = 16,
+    [2] = 64,
+    [3] = 256
 };
 
 const uint8_t interrupt_vector[] = {
@@ -479,7 +513,7 @@ const uint8_t cb_instr_cycle[256] = {
 
 /* bus declarations */
 uint8_t dma_get_data(struct gb *gb, uint16_t addr);
-uint8_t bus_read(struct gb *gb, uint16_t addr);
+uint8_t bus_read(struct gb *gb, uint_fast16_t addr);
 void bus_write(struct gb *gb, uint16_t addr, uint8_t val);
 
 void push_word(struct gb *gb, uint16_t val);
@@ -1560,10 +1594,11 @@ void sm83_step(struct gb *gb)
         printf("Unknown opcode 0x%02x\n", opcode);
         break;
     }
-    
+
     /* timer handling */
     gb->timer.div += gb->executed_cycle * 4;
-    if ((gb->timer.div >= div_bit_to_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
+    if ((gb->timer.div >= tim_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
+        gb->timer.div -= tim_freq[gb->timer.tac.freq];
         if (gb->timer.tima == 0xff)
             INTERRUPT_REQUEST(INTR_SRC_TIMER);
         gb->timer.tima = (gb->timer.tima == 0xff) ? gb->timer.tma : gb->timer.tima + 1;
@@ -1578,7 +1613,7 @@ void sm83_step(struct gb *gb)
         } else if (gb->dma.tick >= 160 && gb->dma.mode == TRANSFERING) {
             for (int i = 0; i < 160; i++) {
                 uint8_t transfer_val = bus_read(gb, gb->dma.start_addr + i);
-                bus_write(gb, 0xfe00 + i, transfer_val);
+                gb->oam[i] = transfer_val;
             }
             gb->dma.mode = OFF;
         }
@@ -1589,11 +1624,11 @@ void sm83_step(struct gb *gb)
         return;
     gb->ppu.ticks += gb->executed_cycle * 4;
     if (gb->ppu.ly <= 143) {
-        if (gb->ppu.ticks <= 80) {
+        if (gb->ppu.ticks <= 80 && gb->ppu.mode != OAM_SCAN) {
             SET_MODE(OAM_SCAN);
-        } else if (gb->ppu.ticks <= 252) {
+        } else if (gb->ppu.ticks <= 252 && gb->ppu.mode != DRAWING) {
             SET_MODE(DRAWING);
-        } else if (gb->ppu.ticks <= 456) {
+        } else if (gb->ppu.ticks <= 456 && gb->ppu.mode != HBLANK) {
             SET_MODE(HBLANK);
         }
     }
@@ -1659,6 +1694,7 @@ void sm83_step(struct gb *gb)
             gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
             gb->ppu.ticks = 0;
         }
+        gb->ppu.scan_line_ready = true;
     }
     if (gb->interrupt.ie & INTR_SRC_LCD) {
         stat_intr_line = ((gb->ppu.stat.mode0_int_select && gb->ppu.stat.ppu_mode == HBLANK) ||
@@ -1669,7 +1705,6 @@ void sm83_step(struct gb *gb)
             INTERRUPT_REQUEST(INTR_SRC_LCD);
         gb->ppu.stat_intr_line = stat_intr_line;
     }
-//        ppu_check_stat_intr(gb);
 
     /* deal with interrupt */
     is_interrupt = IS_INTERRUPT_PENDING();
@@ -1696,25 +1731,6 @@ void sm83_step(struct gb *gb)
 
 #define GET_COLOR(which_pal, color_id)        \
     palette[(gb->ppu.pal[(which_pal)] >> ((color_id) * 2)) & 0x03]
-// uint16_t get_color_from_palette(struct gb *gb, palette_t pal, uint8_t color_id)
-// {
-//     uint32_t ret;
-
-//     switch (pal) {
-//     case BGP:
-//         ret =  palette[(gb->ppu.bgp >> (color_id * 2)) & 0x03];
-//         break;
-//     case OBP0:
-//         ret =  palette[(gb->ppu.obp0 >> (color_id * 2)) & 0x03];
-//         break;
-//     case OBP1:
-//         ret =  palette[(gb->ppu.obp1 >> (color_id * 2)) & 0x03];
-//         break;
-//     default:
-//         break;
-//     }
-//     return ret;
-// }
 
 #define READ_VRAM(addr)         \
     gb->vram[addr - 0x8000]
@@ -1729,71 +1745,76 @@ int cmpfunc(const void *a, const void *b)
 
 void ppu_draw_scanline(struct gb *gb)
 {
-    uint8_t tile_index, color_id_low, color_id_high, color_id,
-            offset_x, offset_y, x_pos, y_pos, sprite_color_id;
-    bool is_window_pixel;
-    uint16_t tile_map_addr, tile_addr, color;
-    static int window_offset = 0;
-    pixel_type_t ptype;
+    uint8_t tile_index, color_id_low, color_id_high, offset_x, offset_y, 
+            x_pos, y_pos, sprite_color_id, window_offset, non_window_range;
+    bool window_in_line, pixel_type[SCREEN_WIDTH];
+    uint16_t tile_map_addr, tile_addr;
+    uint8_t color_id[SCREEN_WIDTH];
 
-    for (int i = 0; i < SCREEN_WIDTH; i++) {
-        // deal with bg and window
-        if (!gb->ppu.lcdc.bg_win_enable)
-            goto set_frame_buffer;
-        is_window_pixel = gb->ppu.draw_window_this_line = gb->ppu.lcdc.win_enable && gb->ppu.window_in_frame && (i + 7 >= gb->ppu.wx);
-        tile_map_addr = (is_window_pixel) ? gb->ppu.lcdc.win_tile_map : gb->ppu.lcdc.bg_tile_map;
-        offset_x = (!is_window_pixel) ? (i + gb->ppu.scx) & 0xff : window_offset;
-        offset_y = (!is_window_pixel) ? (gb->ppu.ly + gb->ppu.scy) & 0xff : gb->ppu.window_line_cnt;
-        ptype = BG_WIN;
-//        if (!(i % 8)) {
-            tile_index = READ_VRAM(tile_map_addr + ((offset_x / 8 + 32 * (offset_y / 8)) & 0x3ff));
+    // we deal with window first
+    window_offset = 0;
+    gb->ppu.draw_window_this_line = gb->ppu.lcdc.win_enable && gb->ppu.window_in_frame && (IN_RANGE(gb->ppu.wx - 7, 0, 159));
+    if (gb->ppu.draw_window_this_line) {
+        for (int i = gb->ppu.wx - 7; i < SCREEN_WIDTH; i++) {
+            if ((window_offset % 8) == 0) {
+                tile_index = READ_VRAM(gb->ppu.lcdc.win_tile_map + ((window_offset / 8 + 32 * (gb->ppu.window_line_cnt / 8)) & 0x3ff));
+                tile_addr = (gb->ppu.lcdc.bg_win_tiles == 0x8000) ? 0x8000 + 16 * (uint8_t)tile_index : 0x9000 + 16 * (int8_t)tile_index;
+            }
+            color_id[i] = color_id_low | (color_id_high << 1);
+            gb->buffer_ptr->buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
+            window_offset++;
+        }
+        window_offset = 0;
+    }
+
+    // then come to background
+    non_window_range = (gb->ppu.draw_window_this_line) ? gb->ppu.wx - 8 : SCREEN_WIDTH;
+    offset_y = (gb->ppu.ly + gb->ppu.scy) & 0xff;
+    for (int i = 0; i < non_window_range; i++) {
+        if (!gb->ppu.lcdc.bg_win_enable) {
+            gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = palette[0];
+            continue;
+        }
+        offset_x = (i + gb->ppu.scx) & 0xff;
+        if ((i % 8) == 0) {
+            tile_index = READ_VRAM(gb->ppu.lcdc.bg_tile_map + ((offset_x / 8 + 32 * (offset_y / 8)) & 0x3ff));
             tile_addr = (gb->ppu.lcdc.bg_win_tiles == 0x8000)
                         ? 0x8000 + 16 * (uint8_t)tile_index : 0x9000 + 16 * (int8_t)tile_index;
-//        }
-        if (is_window_pixel)
-            offset_x = window_offset++;
+        }
         color_id_low = (READ_VRAM(tile_addr + (offset_y % 8) * 2) >> (7 - (offset_x % 8))) & 0x01;
         color_id_high = (READ_VRAM(tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
-        color_id = color_id_low | (color_id_high << 1);
-set_frame_buffer:
-        gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = (gb->ppu.lcdc.bg_win_enable) 
-                                                                    ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
-        // gb->line_buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? get_color_from_palette(gb, BGP, color_id_low | (color_id_high << 1)) : palette[0];
-        // gb->frame_buffer[i * 2 + gb->ppu.ly * 2 * SCREEN_WIDTH] = MSB(color);
-        // gb->frame_buffer[i * 2 + 1 + gb->ppu.ly * 2 * SCREEN_WIDTH] = LSB(color);
-         
-        // deal with sprite
-        if (!gb->ppu.lcdc.obj_enable)
-            continue;
-        for (int j = gb->ppu.oam_entry_cnt - 1; j >= 0; j--) {
-            if (!IN_RANGE(i, gb->ppu.oam_entry[j].x - 8, gb->ppu.oam_entry[j].x))
-                continue;
-            tile_index = gb->ppu.oam_entry[j].tile_index;
-            x_pos = i - (gb->ppu.oam_entry[j].x - 8);
-            y_pos = (gb->ppu.ly - (gb->ppu.oam_entry[j].y - 16)) % 16;
-            offset_x = (gb->ppu.oam_entry[j].attributes.x_flip) ? x_pos : 7 - x_pos;
-            offset_y = (!gb->ppu.oam_entry[j].attributes.y_flip) ? y_pos : gb->ppu.lcdc.obj_size - 1 - (y_pos);
-            if (gb->ppu.lcdc.obj_size == 16 && y_pos >= 8)  // bottom
-                tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index & 0xfe : tile_index | 0x01;
-            else if (gb->ppu.lcdc.obj_size == 16 && y_pos <= 7) // top
-                tile_index = (gb->ppu.oam_entry[j].attributes.y_flip) ?  tile_index | 0x01 : tile_index & 0xfe;
-            tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
-            uint8_t test = (!gb->ppu.oam_entry[j].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
-            // color_id_low = (READ_VRAM(tile_addr + (offset_y) * 2) >> (offset_x)) & 0x01;
-            // color_id_high = (READ_VRAM(tile_addr + (offset_y) * 2 + 1) >> (offset_x)) & 0x01;
+        color_id[i] = color_id_low | (color_id_high << 1);
+        gb->buffer_ptr->buffer[i] = (gb->ppu.lcdc.bg_win_enable) ? GET_COLOR(BGP, color_id_low | (color_id_high << 1)) : palette[0];
+    }
+
+    // finally, sprite
+    memset(pixel_type, SCREEN_WIDTH, BG);
+    if (!gb->ppu.lcdc.obj_enable || !gb->ppu.oam_entry_cnt)
+        return;
+    for (int i = gb->ppu.oam_entry_cnt - 1; i >= 0; i--) {
+        tile_index = gb->ppu.oam_entry[i].tile_index;
+        y_pos = (gb->ppu.ly - (gb->ppu.oam_entry[i].y - 16)) % 16;
+        offset_y = (!gb->ppu.oam_entry[i].attributes.y_flip) ? y_pos : gb->ppu.lcdc.obj_size - 1 - (y_pos);
+        if (gb->ppu.lcdc.obj_size == 16 && y_pos >= 8)  // bottom
+            tile_index = (gb->ppu.oam_entry[i].attributes.y_flip) ?  tile_index & 0xfe : tile_index | 0x01;
+        else if (gb->ppu.lcdc.obj_size == 16 && y_pos <= 7) // top
+            tile_index = (gb->ppu.oam_entry[i].attributes.y_flip) ?  tile_index | 0x01 : tile_index & 0xfe;
+        tile_addr = 0x8000 + 16 * (uint8_t)tile_index;
+        uint8_t test = (!gb->ppu.oam_entry[i].attributes.y_flip) ? (y_pos % 8) : 7 - (y_pos % 8);
+        for (int j = gb->ppu.oam_entry[i].x - 8; j <= gb->ppu.oam_entry[i].x; j++) {
+            x_pos = j - (gb->ppu.oam_entry[i].x - 8);
+            offset_x = (gb->ppu.oam_entry[i].attributes.x_flip) ? x_pos : 7 - x_pos;
             color_id_low = (READ_VRAM(tile_addr + (test) * 2) >> (offset_x)) & 0x01;
             color_id_high = (READ_VRAM(tile_addr + (test) * 2 + 1) >> (offset_x)) & 0x01;
             sprite_color_id = color_id_low | (color_id_high << 1);
-            if (((ptype == BG_WIN) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[j].attributes.priority && color_id > 0))) ||
-                ((ptype == SPRITE) && (color_id > 0 && !sprite_color_id)))
+            if (((pixel_type[j] == BG) && (!sprite_color_id || (sprite_color_id > 0 && gb->ppu.oam_entry[i].attributes.priority && color_id[j] > 0))) ||
+                ((pixel_type[j] == SPRITE) && (color_id > 0 && !sprite_color_id)))
                 continue;
-            gb->frame_buffer[i + gb->ppu.ly * SCREEN_WIDTH] = 
-                            GET_COLOR(gb->ppu.oam_entry[j].attributes.dmg_palette, sprite_color_id);
-            color_id = sprite_color_id;
-            ptype = SPRITE;
+            gb->buffer_ptr->buffer[j] = GET_COLOR(gb->ppu.oam_entry[i].attributes.dmg_palette, sprite_color_id);
+            color_id[j] = sprite_color_id;
+            pixel_type[j] = SPRITE;
         }
     }
-    window_offset = 0;
 }
 
 void ppu_check_stat_intr(struct gb *gb)
@@ -1964,8 +1985,6 @@ void load_state_after_booting(struct gb *gb)
 
     for (int i = 0; i < 160 * 144; i++)
         gb->frame_buffer[i] = COLOR_DARKGRAY;
-    for (int i = 0; i < 160; i++)
-        gb->line_buffer[i] = COLOR_DARKGRAY;
 
     // cpu
     cpu->pc = 0x100;
@@ -2156,100 +2175,73 @@ void load_state_after_booting(struct gb *gb)
 /************************************* bus related parts **************************************/
 /**********************************************************************************************/
 
-uint8_t bus_read(struct gb *gb, uint16_t addr)
+uint8_t bus_read(struct gb *gb, uint_fast16_t addr)
 {
-    uint8_t ret = 0xff;
-
     switch (GET_MEM_REGION(addr)) {
     case ROM:
-        ret = gb->cart.rom[addr];
-        break;
+        return gb->cart.rom[addr];
     case VRAM:
-        ret = gb->vram[addr - 0x8000];
-        break;
+        return gb->vram[addr - 0x8000];
     case EXTERN_RAM:
-        ret = gb->extern_ram[addr - 0xa000];
-        break;
+        return gb->extern_ram[addr - 0xa000];
     case WRAM:
-        ret = gb->wram[addr - 0xc000];
-        break;
+        return gb->wram[addr - 0xc000];
     case ECHO_RAM:
-        ret = gb->wram[(addr & 0xddff) - 0xc000];
-        break;
+        return gb->wram[(addr & 0xddff) - 0xc000];
     case OAM:
-        ret = gb->oam[addr - 0xfe00];
-        break;
+        return gb->oam[addr - 0xfe00];
     case UNUSED:
-        ret = gb->unused[addr - 0xfea0];
-        break;
+        return gb->unused[addr - 0xfea0];
     case IO:
         switch (WHICH_IO_REGION(addr)) {
         case TIMER:
             switch (addr) {
             case TIM_REG_DIV:
-                ret = (gb->timer.div >> 6) & 0x00ff;
-                break;
+                return (gb->timer.div >> 6) & 0x00ff;
             case TIM_REG_TAC:
-                ret = gb->timer.tac.val;
-                break;
+                return gb->timer.tac.val;
             case TIM_REG_TIMA:
-                ret = gb->timer.tima;
-                break;
+                return gb->timer.tima;
             case TIM_REG_TMA:
-                ret = gb->timer.tma;
-                break;
+                return gb->timer.tma;
             default:
                 break;
             }
         case INTERRUPT:
             switch (addr) {
             case INTR_REG_IE:
-                ret = gb->interrupt.ie;
-                break;
+                return gb->interrupt.ie;
             case INTR_REG_IF:
-                ret = gb->interrupt.flag;
-                break;
+                return gb->interrupt.flag;
             default:
                 break;
             }
         case PPU:
             switch (addr) {
             case PPU_REG_LCDC:
-                ret = gb->ppu.lcdc.val;
-                break;
+                return gb->ppu.lcdc.val;
             case PPU_REG_STAT:
-                ret = gb->ppu.stat.val;
-                break;
+                return gb->ppu.stat.val;
             case PPU_REG_SCY:
-                ret = gb->ppu.scy;
-                break; 
+                return gb->ppu.scy;
             case PPU_REG_SCX:
-                ret = gb->ppu.scx;
-                break; 
+                return gb->ppu.scx;
             case PPU_REG_LY:
-                ret = gb->ppu.ly;
-                break; 
+                return gb->ppu.ly;
             case PPU_REG_LYC:
-                ret = gb->ppu.lyc;
-                break; 
+                return gb->ppu.lyc;
             case PPU_REG_BGP:
-                ret = gb->ppu.pal[BGP];
-                break;
+                return gb->ppu.pal[BGP];
             case PPU_REG_OBP0:
-                ret = gb->ppu.pal[OBP0];
-                break;
+                return gb->ppu.pal[OBP0];
             case PPU_REG_OBP1:
-                ret = gb->ppu.pal[OBP1];
-                break;
+                return gb->ppu.pal[OBP1];
             case PPU_REG_WY:
-                ret = gb->ppu.wy;
-                break;
+                return gb->ppu.wy;
             case PPU_REG_WX:
-                ret = gb->ppu.wx;
-                break;
+                return gb->ppu.wx;
             case DMA_REG_OAM:
-                ret = gb->dma.reg;
-                break;
+                return gb->dma.reg;
             default:
                 break;
             }
@@ -2258,12 +2250,11 @@ uint8_t bus_read(struct gb *gb, uint16_t addr)
         }
         break;
     case HRAM:
-        ret = gb->hram[addr - 0xff80];
-        break;
+        return gb->hram[addr - 0xff80];
     default:
         break;
     }
-    return ret;
+    return 0xff;
 }
 
 void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
@@ -2388,4 +2379,3 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
         break;
     }
 }
-
