@@ -393,7 +393,6 @@ struct serial {
 
 struct gb {
     struct pixel_buffer *buffer_ptr;
-    uint16_t frame_buffer[SCREEN_HEIGHT * SCREEN_WIDTH];
     uint8_t vram[0x2000];
     uint8_t extern_ram[8 * KiB];
     uint8_t wram[0x2000];
@@ -1709,8 +1708,8 @@ void sm83_step(struct gb *gb)
     is_interrupt = IS_INTERRUPT_PENDING();
     if (is_interrupt)
         gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
-    gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
-    if (gb->interrupt.interrupt_handled) {
+//    gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
+    if (gb->cpu.ime && is_interrupt) {
         if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
             interrupt_handler(gb, INTR_SRC_VBLANK);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
@@ -1991,9 +1990,6 @@ void load_state_after_booting(struct gb *gb)
     struct serial *serial = &gb->serial;
 
     gb->mode = NORMAL;
-
-    for (int i = 0; i < 160 * 144; i++)
-        gb->frame_buffer[i] = COLOR_DARKGRAY;
 
     // cpu
     cpu->pc = 0x100;
