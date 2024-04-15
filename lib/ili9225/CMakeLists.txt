@@ -1,0 +1,4 @@
+add_library(ili9225 ili9225.c)
+target_link_libraries(ili9225 pico_stdlib)
+target_link_libraries(ili9225 hardware_spi)
+target_link_libraries(ili9225 hardware_dma)

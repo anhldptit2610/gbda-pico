@@ -15,7 +15,7 @@
 #include "hardware/timer.h"
 #include "hardware/clocks.h"
 #include "pico/multicore.h"
-#include "ili9341.h"
+#include "ili9225.h"
 #include "tetris.h"
 
 #define SAMPLE_RATE             44100
@@ -28,8 +28,8 @@
 #define COLOR_BLACK          0x11c2
 
 #define SYSTEM_CLOCK        4194304
-#define LCD_HEIGHT          320
-#define LCD_WIDTH           240
+#define LCD_HEIGHT          220
+#define LCD_WIDTH           176
 #define SCREEN_WIDTH        160
 #define SCREEN_HEIGHT       144
 

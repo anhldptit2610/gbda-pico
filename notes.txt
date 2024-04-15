@@ -1,7 +1,13 @@
 1. Wiring
-    - LCD: no backlight control, always high
-           CLK ----------> GP18 - SPI0 SCK
-           SDA ----------> GP19 - SPI0 TX
-           DC  ----------> GP20
-           RST ----------> GP21
-           CS  ----------> GP17 - SPI0 CSn
+    - LCD(ILI9341): no backlight control, always high
+        CLK ----------> GP18 - SPI0 SCK
+        SDA ----------> GP19 - SPI0 TX
+        DC  ----------> GP20
+        RST ----------> GP21
+        CS  ----------> GP17 - SPI0 CSn
+    - LCD(ILI9225): no backlight control, always high
+        CLK ----------> GP18 - SPI0 SCK
+        SDA ----------> GP19 - SPI0 TX
+        DC(RS) -------> GP20
+        RST ----------> GP21
+        CS  ----------> GP17 - SPI0 CSn
