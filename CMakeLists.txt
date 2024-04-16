@@ -23,7 +23,8 @@ target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/roms)
 target_include_directories(gbda-pico PRIVATE ${CMAKE_SOURCE_DIR}/lib/ili9225)
 
 target_link_libraries(gbda-pico ili9225 m) 
-target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore hardware_timer hardware_sync hardware_clocks hardware_gpio)
+target_link_libraries(gbda-pico pico_stdlib hardware_dma hardware_spi pico_multicore 
+                    hardware_timer hardware_sync hardware_clocks hardware_gpio hardware_pll)
 
 pico_enable_stdio_uart(gbda-pico 1)
 

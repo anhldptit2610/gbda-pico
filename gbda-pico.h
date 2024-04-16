@@ -14,9 +14,13 @@
 #include "hardware/spi.h"
 #include "hardware/timer.h"
 #include "hardware/clocks.h"
+#include "hardware/vreg.h"
+#include "hardware/pll.h"
 #include "pico/multicore.h"
 #include "ili9225.h"
 #include "tetris.h"
+
+#define SYS_FREQ                270
 
 #define SAMPLE_RATE             44100
 #define NUM_CHANNELS            2
@@ -44,7 +48,27 @@
 #define RES(f, n)           ((f) &= ~(1U << (n)))
 #define IN_RANGE(x, a, b)   ((x) >= (a) && (x) <= (b))
 
+#define JOYPAD_A                0
+#define JOYPAD_B                1
+#define JOYPAD_START            2
+#define JOYPAD_SELECT           3
+#define JOYPAD_RIGHT            4
+#define JOYPAD_UP               5
+#define JOYPAD_DOWN             6
+#define JOYPAD_LEFT             7
+
+#define JOYPAD_A_PIN        15
+#define JOYPAD_B_PIN        14
+#define JOYPAD_START_PIN    13
+#define JOYPAD_SELECT_PIN   12
+#define JOYPAD_RIGHT_PIN    11
+#define JOYPAD_UP_PIN       10
+#define JOYPAD_DOWN_PIN     9
+#define JOYPAD_LEFT_PIN     8
+
 /* registers definition */
+#define JOYP_REG_P1                 0xff00
+
 #define TIM_REG_DIV                 0xff04
 #define TIM_REG_TIMA                0xff05
 #define TIM_REG_TMA                 0xff06
@@ -117,6 +141,7 @@ enum IO_REGIONS {
     INTERRUPT = (1U << 0),
     TIMER = (1U << 1),
     PPU = (1U << 2),
+    JOYPAD = (1U << 3),
 };
 
 typedef enum {
@@ -356,14 +381,15 @@ struct joypad {
             uint8_t unused : 2;
         };
     } joyp;
-    bool a;
-    bool b;
-    bool select;
-    bool start;
-    bool right;
-    bool left;
-    bool up;
-    bool down;
+    bool button[8];
+    // bool a;
+    // bool b;
+    // bool select;
+    // bool start;
+    // bool right;
+    // bool left;
+    // bool up;
+    // bool down;
 };
 
 struct mbc1{
@@ -504,7 +530,8 @@ const uint8_t cb_instr_cycle[256] = {
 #define WHICH_IO_REGION(addr)                   \
     ((IS_INTERRUPT_REG(addr) << 0)        |     \
     (IN_RANGE(addr, 0xff04, 0xff07) << 1) |     \
-    (IN_RANGE(addr, 0xff40, 0xff4b) << 2))
+    (IN_RANGE(addr, 0xff40, 0xff4b) << 2) |     \
+    ((addr == JOYP_REG_P1) << 3))
 
 #define SET_MODE(Mode)              \
     gb->ppu.stat.ppu_mode = Mode;   \
@@ -2050,16 +2077,9 @@ void load_state_after_booting(struct gb *gb)
     dma->mode = OFF;
     dma->reg = 0xff;
 
-    // // joypad
-    // joypad->a = 1;
-    // joypad->b = 1;
-    // joypad->select = 1;
-    // joypad->start = 1;
-    // joypad->up = 1;
-    // joypad->down = 1;
-    // joypad->left = 1;
-    // joypad->right = 1;
-    // joypad->joyp.val = 0xcf;
+    // joypad
+    memset(joypad->button, 1, 8);
+    joypad->joyp.val = 0xcf;
 
     // // mbc1
     // mbc->mbc1.ram_enable = 0;
@@ -2199,6 +2219,16 @@ uint8_t bus_read(struct gb *gb, uint_fast16_t addr)
         return gb->unused[addr - 0xfea0];
     case IO:
         switch (WHICH_IO_REGION(addr)) {
+        case JOYPAD:
+            if (gb->joypad.joyp.select_button && gb->joypad.joyp.select_dpad)
+                return 0xff;
+            else if (!gb->joypad.joyp.select_dpad)
+                return (gb->joypad.joyp.val & 0xf0) | (gb->joypad.button[JOYPAD_RIGHT] << 0) | (gb->joypad.button[JOYPAD_LEFT] << 1) 
+                        | (gb->joypad.button[JOYPAD_UP] << 2) | (gb->joypad.button[JOYPAD_DOWN] << 3);
+            else if (!gb->joypad.joyp.select_button)
+                return (gb->joypad.joyp.val & 0xf0) | (gb->joypad.button[JOYPAD_A] << 0) | (gb->joypad.button[JOYPAD_B] << 1) |
+                         (gb->joypad.button[JOYPAD_SELECT] << 2) | (gb->joypad.button[JOYPAD_START] << 3);
+            break;
         case TIMER:
             switch (addr) {
             case TIM_REG_DIV:
@@ -2288,6 +2318,9 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
         break;
     case IO:
         switch (WHICH_IO_REGION(addr)) {
+        case JOYPAD:
+            gb->joypad.joyp.val = val | (gb->joypad.joyp.val & 0xcf) | 0xc0;
+            break;
         case INTERRUPT:
             switch (addr){
             case INTR_REG_IE:

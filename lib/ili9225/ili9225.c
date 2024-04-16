@@ -76,16 +76,30 @@ void ili9225_stop_drawing(struct ili9225 *ili9225)
     ili9225_set_cs(ili9225, DISABLE);
 }
 
-void ili9225_draw_bitmap(struct ili9225 *ili9225, uint16_t *bitmap, uint width, uint height)
+void ili9225_draw_bitmap(struct ili9225 *ili9225, uint16_t *bitmap, uint width, uint height, transferMethod method)
 {
+    uint32_t dmaBitmap[80 * 144];
+    
     ili9225_write_register(ili9225, ILI9225_GRAM_DATA_REG);
     ili9225_set_cs(ili9225, ENABLE);
     ili9225_set_dc(ili9225, DATA);
-    spi_write16_blocking(ili9225->spiDev, bitmap, width * height);
+    if (method == PLAINSPI) {
+        spi_write16_blocking(ili9225->spiDev, bitmap, width * height);
+    } else if (method == DMA) {
+        for (int i = 0; i < 80 * 144; i++)
+            dmaBitmap[i] = TO_U32(BLACK, BLACK);
+        ili9225->dmaChannelConfig = dma_channel_get_default_config(ili9225->dmaChannel);
+        channel_config_set_transfer_data_size(&ili9225->dmaChannelConfig, DMA_SIZE_32);
+        channel_config_set_dreq(&ili9225->dmaChannelConfig, spi_get_dreq(ili9225->spiDev, true));
+        channel_config_set_write_increment(&ili9225->dmaChannelConfig, false);
+        channel_config_set_read_increment(&ili9225->dmaChannelConfig, true);
+        dma_channel_configure(ili9225->dmaChannel, &ili9225->dmaChannelConfig, &spi_get_hw(ili9225->spiDev)->dr, bitmap, 80 * 144, true);
+        dma_channel_wait_for_finish_blocking(ili9225->dmaChannel);
+    }
     ili9225_set_cs(ili9225, DISABLE);
 }
 
-void ili9225_draw_scanline(struct ili9225 *ili9225, uint16_t *scanline, uint width)
+void ili9225_draw_scanline(struct ili9225 *ili9225, uint16_t *scanline, uint width, transferMethod method)
 {
     spi_write16_blocking(ili9225->spiDev, scanline, 160);
 }
@@ -102,6 +116,15 @@ void ili9225_init(struct ili9225 *ili9225, spi_inst_t *spiDev, uint clkPin, uint
 
     spi_set_format(ili9225->spiDev, 16, 0, 0, SPI_MSB_FIRST);
 
+    /* DMA init */
+    ili9225->dmaChannel = dma_claim_unused_channel(true);
+    ili9225->dmaChannelConfig = dma_channel_get_default_config(ili9225->dmaChannel);
+    channel_config_set_transfer_data_size(&ili9225->dmaChannelConfig, DMA_SIZE_16);
+    channel_config_set_write_increment(&ili9225->dmaChannelConfig, false);
+    channel_config_set_read_increment(&ili9225->dmaChannelConfig, true);
+    dma_channel_configure(ili9225->dmaChannel, &ili9225->dmaChannelConfig, &spi_get_hw(ili9225->spiDev)->dr, NULL, 160 * 144, false);
+
+    /* ILI9225 init */
     ili9225_set_rst(ili9225, DISABLE);
     ili9225_set_cs(ili9225, DISABLE);
     ili9225_set_dc(ili9225, COMMAND);
@@ -158,7 +181,7 @@ void ili9225_init(struct ili9225 *ili9225, spi_inst_t *spiDev, uint clkPin, uint
 			/* Ignore RGB interface settings. */
 			{ILI9225_INTERFACE_CTRL, 0x0000},
 			/* Set oscillation frequency to 266.6 kHz. */
-			{ILI9225_OSC_CTRL, 0x0701},
+			{ILI9225_OSC_CTRL, 0x0f01},
 			/* Set VCI recycling to 2 clocks. */
 			{ILI9225_VCI_RECYCLING, 0x0020},
 			/* Initialise RAM Address to 0x0 px. */
@@ -185,7 +208,7 @@ void ili9225_init(struct ili9225 *ili9225, spi_inst_t *spiDev, uint clkPin, uint
 			// {ILI9225_VERTICAL_WINDOW_ADDR2, 0x0000},
 			{ILI9225_HORIZONTAL_WINDOW_ADDR1, 153},
 			{ILI9225_HORIZONTAL_WINDOW_ADDR2,	9},
-			{ILI9225_VERTICAL_WINDOW_ADDR1, 158},
+			{ILI9225_VERTICAL_WINDOW_ADDR1, 159},
 			{ILI9225_VERTICAL_WINDOW_ADDR2, 0},
 			/* Gamma curve data. */
 			{ILI9225_GAMMA_CTRL1, 0x0000},

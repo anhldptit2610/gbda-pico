@@ -5,6 +5,8 @@
 #include "hardware/gpio.h"
 #include "hardware/spi.h"
 
+#define TO_U32(lo, hi)          (((uint32_t)(hi) << 16) | ((uint32_t)(lo)))
+
 struct ili9225 {
     spi_inst_t *spiDev;
     uint clkPin;
@@ -13,6 +15,9 @@ struct ili9225 {
     uint rstPin;
     uint csPin;
     uint testPin;
+    /* DMA related */
+    int dmaChannel;
+    dma_channel_config dmaChannelConfig;
 };
 
 typedef enum {
@@ -24,6 +29,11 @@ typedef enum {
     COMMAND,
     DATA,
 } dcState;
+
+typedef enum {
+    PLAINSPI,
+    DMA,
+} transferMethod;
 
 #define ILI9225_SPI_PORT                        spi_default
 #define ILI9225_CLK_PIN                         PICO_DEFAULT_SPI_SCK_PIN
@@ -86,6 +96,6 @@ void ili9225_set_window(struct ili9225 *ili9225, uint verticalStart, uint vertic
 void ili9225_set_gram_addr(struct ili9225 *ili9225, uint horizontal, uint vertical);
 void ili9225_start_drawing(struct ili9225 *ili9225);
 void ili9225_stop_drawing(struct ili9225 *ili9225);
-void ili9225_draw_scanline(struct ili9225 *ili9225, uint16_t *scanline, uint width);
-void ili9225_draw_bitmap(struct ili9225 *ili9225, uint16_t *bitmap, uint width, uint height);
+void ili9225_draw_scanline(struct ili9225 *ili9225, uint16_t *scanline, uint width, transferMethod method);
+void ili9225_draw_bitmap(struct ili9225 *ili9225, uint16_t *bitmap, uint width, uint height, transferMethod method);
 void ili9225_init(struct ili9225 *ili9225, spi_inst_t *spiDev, uint clkPin, uint sdaPin, uint dcPin, uint rstPin, uint csPin);

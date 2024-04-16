@@ -39,6 +39,7 @@
         "04-op_r_imm.h": "c",
         "03-op_sp_hl.h": "c",
         "gbda-pico.h": "c",
-        "dma.h": "c"
+        "dma.h": "c",
+        "stdint.h": "c"
     }
 }
