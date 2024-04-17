@@ -2,6 +2,7 @@
 
 struct gb gb;
 bool button[8];
+uint64_t diff, start;
 
 void gbda_set_sys_clock_pll(uint32_t vco_freq, uint post_div1, uint post_div2) {
     if (!running_on_fpga()) {
@@ -47,6 +48,7 @@ void joypad_callback(uint gpio, uint32_t events)
     switch (gpio) {
     case JOYPAD_LEFT_PIN:
         button[JOYPAD_LEFT] = 0;
+        printf("diff: %lld\n", diff);
         break;
     case JOYPAD_RIGHT_PIN:
         button[JOYPAD_RIGHT] = 0;
@@ -158,6 +160,8 @@ int main(void)
 {
     command_t tx;
 
+    start = diff = 0;
+
     gbda_set_sys_clock_khz(SYS_FREQ * KHZ, false);
     clock_configure(clk_peri, 0, CLOCKS_CLK_PERI_CTRL_AUXSRC_VALUE_CLKSRC_PLL_SYS, SYS_FREQ * MHZ, SYS_FREQ * MHZ);
     stdio_init_all();
@@ -184,7 +188,7 @@ int main(void)
     multicore_launch_core1(core1_entry);
 
     sm83_init(&gb);
-    cartridge_load(&gb, tetris, tetris_rom_size);
+    cartridge_load(&gb, dmg_acid2_gb, dmg_acid2_gb_len);
     load_state_after_booting(&gb);
     while (1) {
         tx.ly = gb.ppu.ly;
@@ -193,6 +197,8 @@ int main(void)
         gb.ppu.scan_line_ready = false;
         if (gb.ppu.frame_ready) {
             gb.ppu.frame_ready = false;
+            diff = time_us_64() - start;
+            start = time_us_64();
             for (int i = 0; i < 8; i++)
                 joypad_check_button(i);
             memset(button, 1, 8);

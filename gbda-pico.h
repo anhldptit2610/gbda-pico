@@ -18,7 +18,8 @@
 #include "hardware/pll.h"
 #include "pico/multicore.h"
 #include "ili9225.h"
-#include "tetris.h"
+//#include "tetris.h"
+#include "dmg-acid2.h"
 
 #define SYS_FREQ                270
 
@@ -547,7 +548,7 @@ void push_word(struct gb *gb, uint16_t val);
 /* interrupt declarations */
 uint8_t interrupt_read(struct gb *gb, uint16_t addr);
 void interrupt_write(struct gb *gb, uint16_t addr, uint8_t val);
-int interrupt_handler(struct gb *gb, uint8_t intr_src);
+void interrupt_handler(struct gb *gb, uint8_t intr_src);
 void interrupt_process(struct gb *gb);
 void interrupt_request(struct gb *gb, uint8_t intr_src);
 bool is_interrupt_pending(struct gb *gb);
@@ -1242,7 +1243,7 @@ void sm83_step(struct gb *gb)
     uint8_t opcode, a, msb, lsb;
     uint16_t operand, res, carry_per_bit;
     bool old_edge, new_edge, is_interrupt, stat_intr_line;
-    static uint8_t dma_addr = 0;
+    static uint8_t dma_addr = 0, ppu_mode_set[4] = {0};
 
     gb->executed_cycle = 0;
     opcode = (gb->mode == HALT) ? 0x00 : SM83_FETCH_BYTE();
@@ -1624,8 +1625,10 @@ void sm83_step(struct gb *gb)
     gb->timer.div += gb->executed_cycle * 4;
     if ((gb->timer.div >= tim_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
         gb->timer.div -= tim_freq[gb->timer.tac.freq];
-        if (gb->timer.tima == 0xff)
+        if (gb->timer.tima == 0xff) {
             INTERRUPT_REQUEST(INTR_SRC_TIMER);
+            interrupt_process(gb);
+        }
         gb->timer.tima = (gb->timer.tima == 0xff) ? gb->timer.tma : gb->timer.tima + 1;
     }
 
@@ -1645,8 +1648,11 @@ void sm83_step(struct gb *gb)
     }
 
     /* ppu handling */
-    if (!gb->ppu.lcdc.ppu_enable)
+    if (!gb->ppu.lcdc.ppu_enable) {
+        if (!gb->ppu.scan_line_ready)
+            gb->ppu.scan_line_ready = true;
         return;
+    }
     gb->ppu.ticks += gb->executed_cycle * 4;
     if (gb->ppu.ly <= 143) {
         if (gb->ppu.ticks <= 80 && gb->ppu.mode != OAM_SCAN) {
@@ -1662,19 +1668,21 @@ void sm83_step(struct gb *gb)
         gb->ppu.ticks -= 456;
         if (gb->ppu.ly <= 143) {
             // ppu_oam_scan
-            for (int i = 0; i < 40; i++) {
-                if (gb->oam[i * 4 + 1] > 0 && gb->ppu.oam_entry_cnt < 10 &&
-                    IN_RANGE(gb->ppu.ly, gb->oam[i * 4] - 16, gb->oam[i * 4] - 17 + gb->ppu.lcdc.obj_size)) {
-                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].y = gb->oam[i * 4];
-                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].x = gb->oam[i * 4 + 1];
-                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].tile_index = gb->oam[i * 4 + 2];
-                    gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].attributes.val = gb->oam[i * 4 + 3];
-                    gb->ppu.oam_entry_cnt++;
+            if (gb->ppu.lcdc.obj_enable) {
+                for (int i = 0; i < 40; i++) {
+                    if (gb->oam[i * 4 + 1] > 0 && gb->ppu.oam_entry_cnt < 10 &&
+                        IN_RANGE(gb->ppu.ly, gb->oam[i * 4] - 16, gb->oam[i * 4] - 17 + gb->ppu.lcdc.obj_size)) {
+                        gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].y = gb->oam[i * 4];
+                        gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].x = gb->oam[i * 4 + 1];
+                        gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].tile_index = gb->oam[i * 4 + 2];
+                        gb->ppu.oam_entry[gb->ppu.oam_entry_cnt].attributes.val = gb->oam[i * 4 + 3];
+                        gb->ppu.oam_entry_cnt++;
+                    }
+                    if (gb->ppu.oam_entry_cnt == 10)
+                        break;
                 }
-                if (gb->ppu.oam_entry_cnt == 10)
-                    break;
             }
-            qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
+//            qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
 
             // draw the scanline
             ppu_draw_scanline(gb);
@@ -1688,8 +1696,10 @@ void sm83_step(struct gb *gb)
             gb->ppu.stat.lyc_equal_ly = gb->ppu.ly == gb->ppu.lyc;
             if (gb->ppu.ly == 144) {
                 SET_MODE(VBLANK);
-                if (gb->ppu.lcdc.ppu_enable)
+                if (gb->ppu.lcdc.ppu_enable) {
                     INTERRUPT_REQUEST(INTR_SRC_VBLANK);
+                    interrupt_process(gb);
+                }
                 gb->ppu.frame_ready = true;
                 gb->ppu.window_line_cnt = 0;
                 gb->ppu.draw_window_this_line = false;
@@ -1726,28 +1736,30 @@ void sm83_step(struct gb *gb)
         (gb->ppu.stat.mode1_int_select && gb->ppu.stat.ppu_mode == VBLANK) ||
         (gb->ppu.stat.mode2_int_select && gb->ppu.stat.ppu_mode == OAM_SCAN) || 
         (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
-        if (!gb->ppu.stat_intr_line && stat_intr_line)
+        if (!gb->ppu.stat_intr_line && stat_intr_line) {
             INTERRUPT_REQUEST(INTR_SRC_LCD);
+            interrupt_process(gb);
+        }
         gb->ppu.stat_intr_line = stat_intr_line;
     }
 
-    /* deal with interrupt */
-    is_interrupt = IS_INTERRUPT_PENDING();
-    if (is_interrupt)
-        gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
-//    gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
-    if (gb->cpu.ime && is_interrupt) {
-        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
-            interrupt_handler(gb, INTR_SRC_VBLANK);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
-            interrupt_handler(gb, INTR_SRC_LCD);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
-            interrupt_handler(gb, INTR_SRC_TIMER);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
-            interrupt_handler(gb, INTR_SRC_SERIAL);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
-            interrupt_handler(gb, INTR_SRC_JOYPAD);
-    }
+    // /* deal with interrupt */
+    // is_interrupt = IS_INTERRUPT_PENDING();
+    // if (is_interrupt)
+    //     gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
+    // gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
+    // if (gb->cpu.ime && is_interrupt) {
+    //     if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
+    //         interrupt_handler(gb, INTR_SRC_VBLANK);
+    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
+    //         interrupt_handler(gb, INTR_SRC_LCD);
+    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
+    //         interrupt_handler(gb, INTR_SRC_TIMER);
+    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
+    //         interrupt_handler(gb, INTR_SRC_SERIAL);
+    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
+    //         interrupt_handler(gb, INTR_SRC_JOYPAD);
+    // }
 }
 
 /**********************************************************************************************/
@@ -1773,19 +1785,17 @@ int cmpfunc(const void *a, const void *b)
 void ppu_draw_scanline(struct gb *gb)
 {
     uint8_t tile_index, color_id_low, color_id_high, offset_x, offset_y, x_pos, y_pos, 
-            window_offset, non_window_range, color_id[SCREEN_WIDTH], color[SCREEN_WIDTH];
-    bool window_in_line, pixel_type[SCREEN_WIDTH];
+            window_offset, non_window_range, color_id[SCREEN_WIDTH], color[SCREEN_WIDTH] = {0};
     uint16_t tile_map_addr, tile_addr;
+    bool pixel_type[SCREEN_WIDTH] = {0};
 
     // if LCDC bit 0 is disabled, no rendering bg and window
-    if (!gb->ppu.lcdc.bg_win_enable) {
-        memset(color, 0, SCREEN_WIDTH);
+    if (!gb->ppu.lcdc.bg_win_enable)
         goto sprite;
-    }
 
     // we deal with window first
     window_offset = 0;
-    gb->ppu.draw_window_this_line = gb->ppu.lcdc.win_enable && gb->ppu.window_in_frame && (IN_RANGE(gb->ppu.wx - 7, 0, 159));
+    gb->ppu.draw_window_this_line = gb->ppu.lcdc.bg_win_enable && gb->ppu.window_in_frame && (IN_RANGE(gb->ppu.wx - 7, 0, 159));
     if (gb->ppu.draw_window_this_line) {
         for (int i = gb->ppu.wx - 7; i < SCREEN_WIDTH; i++) {
             if ((window_offset % 8) == 0) {
@@ -1794,8 +1804,7 @@ void ppu_draw_scanline(struct gb *gb)
             }
             color_id_low = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2) >> (7 - (window_offset % 8))) & 0x01;
             color_id_high = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2 + 1) >> (7 - (window_offset % 8))) & 0x01;
-            color_id[i] = color_id_low | (color_id_high << 1);
-            color[i] = GET_COLOR_ID(BGP, color_id[i]);
+            color[i] = GET_COLOR_ID(BGP, color_id_low | (color_id_high << 1));
             window_offset++;
         }
         window_offset = 0;
@@ -1819,7 +1828,6 @@ void ppu_draw_scanline(struct gb *gb)
 
 sprite:
     // finally, sprite
-    memset(pixel_type, BG, SCREEN_WIDTH);
     if (!gb->ppu.lcdc.obj_enable || !gb->ppu.oam_entry_cnt)
         goto set_color;
     for (int i = gb->ppu.oam_entry_cnt - 1; i >= 0; i--) {
@@ -1860,18 +1868,19 @@ void ppu_check_stat_intr(struct gb *gb)
         (gb->ppu.stat.mode1_int_select && gb->ppu.stat.ppu_mode == VBLANK) ||
         (gb->ppu.stat.mode2_int_select && gb->ppu.stat.ppu_mode == OAM_SCAN) || 
         (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
-    if (!gb->ppu.stat_intr_line && stat_intr_line)
+    if (!gb->ppu.stat_intr_line && stat_intr_line) {
         INTERRUPT_REQUEST(INTR_SRC_LCD);
+        interrupt_process(gb);
+    }
     gb->ppu.stat_intr_line = stat_intr_line;
 }
 
-int interrupt_handler(struct gb *gb, uint8_t intr_src)
+void interrupt_handler(struct gb *gb, uint8_t intr_src)
 {
     gb->cpu.ime = false;
     gb->interrupt.flag &= ~intr_src;
     sm83_push_word(gb, gb->cpu.pc);
     gb->cpu.pc = interrupt_vector[intr_src];
-    return 5;
 }
 
 void interrupt_process(struct gb *gb)
