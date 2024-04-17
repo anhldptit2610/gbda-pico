@@ -1,4 +1,17 @@
+#include "pico/stdlib.h"
+#include "hardware/gpio.h"
+#include "hardware/dma.h"
+#include "hardware/sync.h"
+#include "hardware/spi.h"
+#include "hardware/timer.h"
+#include "hardware/clocks.h"
+#include "hardware/vreg.h"
+#include "hardware/pll.h"
+#include "pico/multicore.h"
 #include "gbda-pico.h"
+#include "ili9225.h"
+//#include "tetris.h"
+#include "dmg-acid2.h"
 
 struct gb gb;
 bool button[8];
