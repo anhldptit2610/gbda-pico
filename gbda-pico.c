@@ -96,6 +96,8 @@ void joypad_callback(uint gpio, uint32_t events)
 
 static inline void joypad_check_button(void)
 {
+    bool a = gb.joypad.button[JOYPAD_A], b = gb.joypad.button[JOYPAD_B], select = gb.joypad.button[JOYPAD_SELECT], start = gb.joypad.button[JOYPAD_START],
+        right = gb.joypad.button[JOYPAD_RIGHT], up = gb.joypad.button[JOYPAD_UP], down = gb.joypad.button[JOYPAD_DOWN], left = gb.joypad.button[JOYPAD_LEFT];
     gb.joypad.button[JOYPAD_A] = gpio_get(JOYPAD_A_PIN);
     gb.joypad.button[JOYPAD_B] = gpio_get(JOYPAD_B_PIN);
     gb.joypad.button[JOYPAD_SELECT] = gpio_get(JOYPAD_SELECT_PIN);
@@ -104,11 +106,13 @@ static inline void joypad_check_button(void)
     gb.joypad.button[JOYPAD_UP] = gpio_get(JOYPAD_UP_PIN);
     gb.joypad.button[JOYPAD_DOWN] = gpio_get(JOYPAD_DOWN_PIN);
     gb.joypad.button[JOYPAD_LEFT] = gpio_get(JOYPAD_LEFT_PIN);
-    if (!gb.joypad.button[JOYPAD_A] || !gb.joypad.button[JOYPAD_B] || !gb.joypad.button[JOYPAD_SELECT] || !gb.joypad.button[JOYPAD_START] ||
-        !gb.joypad.button[JOYPAD_RIGHT] || !gb.joypad.button[JOYPAD_UP] || !gb.joypad.button[JOYPAD_DOWN] || !gb.joypad.button[JOYPAD_LEFT]) {
+    if (IS_FALLING_EDGE(left, gb.joypad.button[JOYPAD_LEFT]))
+        printf("diff: %lld\n", diff);
+    if (IS_FALLING_EDGE(a, gb.joypad.button[JOYPAD_A]) || IS_FALLING_EDGE(b, gb.joypad.button[JOYPAD_B]) ||
+        IS_FALLING_EDGE(select, gb.joypad.button[JOYPAD_A]) || IS_FALLING_EDGE(start, gb.joypad.button[JOYPAD_B]) ||
+        IS_FALLING_EDGE(up, gb.joypad.button[JOYPAD_UP]) || IS_FALLING_EDGE(down, gb.joypad.button[JOYPAD_DOWN]) ||
+        IS_FALLING_EDGE(left, gb.joypad.button[JOYPAD_LEFT]) || IS_FALLING_EDGE(right, gb.joypad.button[JOYPAD_RIGHT]))
         gb.interrupt.flag |= INTR_SRC_JOYPAD;
-        interrupt_process(&gb);
-    }
 }
 
 void joypad_init(void)

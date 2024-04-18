@@ -29,13 +29,14 @@
 #define KiB                 1024
 #define MiB                 1048576
 
-#define MSB(n)              (((uint16_t)(n) >> 8) & 0x00ff)
-#define LSB(n)              ((uint16_t)(n) & 0x00ff)
-#define TO_U16(lsb, msb)    (((uint16_t)(msb) << 8) | (uint16_t)(lsb))
-#define BIT(f, n)           (((f) >> (n)) & 0x0001)
-#define SET(f, n)           ((f) |= (1U << (n)))
-#define RES(f, n)           ((f) &= ~(1U << (n)))
-#define IN_RANGE(x, a, b)   ((x) >= (a) && (x) <= (b))
+#define MSB(n)                      (((uint16_t)(n) >> 8) & 0x00ff)
+#define LSB(n)                      ((uint16_t)(n) & 0x00ff)
+#define TO_U16(lsb, msb)            (((uint16_t)(msb) << 8) | (uint16_t)(lsb))
+#define BIT(f, n)                   (((f) >> (n)) & 0x0001)
+#define SET(f, n)                   ((f) |= (1U << (n)))
+#define RES(f, n)                   ((f) &= ~(1U << (n)))
+#define IN_RANGE(x, a, b)           ((x) >= (a) && (x) <= (b))
+#define IS_FALLING_EDGE(a, b)       ((a) && !(b))
 
 #define JOYPAD_A                0
 #define JOYPAD_B                1
@@ -1635,13 +1636,13 @@ void sm83_step(struct gb *gb)
         printf("Unknown opcode 0x%02x\n", opcode);
         break;
     }
+
     /* timer handling */
     gb->timer.div += gb->executed_cycle * 4;
     if ((gb->timer.div >= tim_freq[gb->timer.tac.freq]) && (gb->timer.tac.enable)) {
         gb->timer.div -= tim_freq[gb->timer.tac.freq];
         if (gb->timer.tima == 0xff) {
             INTERRUPT_REQUEST(INTR_SRC_TIMER);
-            interrupt_process(gb);
         }
         gb->timer.tima = (gb->timer.tima == 0xff) ? gb->timer.tma : gb->timer.tima + 1;
     }
@@ -1710,7 +1711,6 @@ void sm83_step(struct gb *gb)
                 SET_MODE(VBLANK);
                 if (gb->ppu.lcdc.ppu_enable) {
                     INTERRUPT_REQUEST(INTR_SRC_VBLANK);
-                    interrupt_process(gb);
                 }
                 gb->ppu.frame_ready = true;
                 gb->ppu.window_line_cnt = 0;
@@ -1750,11 +1750,11 @@ void sm83_step(struct gb *gb)
         (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
         if (!gb->ppu.stat_intr_line && stat_intr_line) {
             INTERRUPT_REQUEST(INTR_SRC_LCD);
-            interrupt_process(gb);
         }
         gb->ppu.stat_intr_line = stat_intr_line;
     }
 
+    interrupt_process(gb);
     // /* deal with interrupt */
     // is_interrupt = IS_INTERRUPT_PENDING();
     // if (is_interrupt)
@@ -1881,7 +1881,6 @@ void ppu_check_stat_intr(struct gb *gb)
         (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
     if (!gb->ppu.stat_intr_line && stat_intr_line) {
         INTERRUPT_REQUEST(INTR_SRC_LCD);
-        interrupt_process(gb);
     }
     gb->ppu.stat_intr_line = stat_intr_line;
 }
@@ -1905,7 +1904,6 @@ void interrupt_process(struct gb *gb)
         if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
             interrupt_handler(gb, INTR_SRC_VBLANK);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
-            printf("LCD interrupt fired\n");
             interrupt_handler(gb, INTR_SRC_LCD);
         } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
             interrupt_handler(gb, INTR_SRC_TIMER);
