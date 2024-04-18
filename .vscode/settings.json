@@ -43,6 +43,7 @@
         "stdint.h": "c",
         "dmg-acid2.h": "c",
         "pitman.h": "c",
-        "kirby_dream_land.h": "c"
+        "kirby_dream_land.h": "c",
+        "dr_mario.h": "c"
     }
 }

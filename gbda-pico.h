@@ -462,14 +462,6 @@ const uint8_t tim_freq[] = {
     [3] = 256
 };
 
-const uint8_t interrupt_vector[] = {
-    [INTR_SRC_VBLANK] = 0x40,
-    [INTR_SRC_LCD] = 0x48,
-    [INTR_SRC_TIMER] = 0x50,
-    [INTR_SRC_SERIAL] = 0x58,
-    [INTR_SRC_JOYPAD] = 0x60,
-};
-
 const uint8_t instr_cycle[256] = {
 //  x0 x1 x2 x3 x4 x5 x6 x7 x8 x9 xA xB xC xD xE xF
     1, 3, 2, 2, 1, 1, 2, 1, 5, 2, 2, 2, 1, 1, 2, 1, // 0x
@@ -563,7 +555,6 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val);
 /* interrupt declarations */
 uint8_t interrupt_read(struct gb *gb, uint16_t addr);
 void interrupt_write(struct gb *gb, uint16_t addr, uint8_t val);
-void interrupt_handler(struct gb *gb, uint8_t intr_src);
 void interrupt_process(struct gb *gb);
 void interrupt_request(struct gb *gb, uint8_t intr_src);
 bool is_interrupt_pending(struct gb *gb);
@@ -977,8 +968,8 @@ void toggle_znh(struct gb *gb, uint8_t res, bool n, bool h)
     sm83_push_word(gb, gb->cpu.pc); \
     gb->cpu.pc = n
 
-#define HALT()                      \
-    gb->mode = HALT;                \
+#define HALT()                                                          \
+    gb->mode = (IS_INTERRUPT_PENDING()) ? HALT : NORMAL;                \
 
 #define DI()                    \
     gb->cpu.ime = false
@@ -1754,24 +1745,27 @@ void sm83_step(struct gb *gb)
         gb->ppu.stat_intr_line = stat_intr_line;
     }
 
-    interrupt_process(gb);
-    // /* deal with interrupt */
-    // is_interrupt = IS_INTERRUPT_PENDING();
-    // if (is_interrupt)
-    //     gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
-    // gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
-    // if (gb->cpu.ime && is_interrupt) {
-    //     if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
-    //         interrupt_handler(gb, INTR_SRC_VBLANK);
-    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
-    //         interrupt_handler(gb, INTR_SRC_LCD);
-    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
-    //         interrupt_handler(gb, INTR_SRC_TIMER);
-    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
-    //         interrupt_handler(gb, INTR_SRC_SERIAL);
-    //     else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
-    //         interrupt_handler(gb, INTR_SRC_JOYPAD);
-    // }
+    gb->interrupt.interrupt_handled = gb->cpu.ime && IS_INTERRUPT_PENDING();
+    if (gb->interrupt.interrupt_handled) {
+        gb->cpu.ime = false;
+        sm83_push_word(gb, gb->cpu.pc);
+        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK) {
+            gb->interrupt.flag &= ~INTR_SRC_VBLANK;
+            gb->cpu.pc = 0x40;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
+            gb->interrupt.flag &= ~INTR_SRC_LCD;
+            gb->cpu.pc = 0x48;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER) {
+            gb->interrupt.flag &= ~INTR_SRC_TIMER;
+            gb->cpu.pc = 0x50;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL) {
+            gb->interrupt.flag &= ~INTR_SRC_SERIAL;
+            gb->cpu.pc = 0x58;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD) {
+            gb->interrupt.flag &= ~INTR_SRC_JOYPAD;
+            gb->cpu.pc = 0x60;
+        }
+    }
 }
 
 /**********************************************************************************************/
@@ -1885,14 +1879,6 @@ void ppu_check_stat_intr(struct gb *gb)
     gb->ppu.stat_intr_line = stat_intr_line;
 }
 
-void interrupt_handler(struct gb *gb, uint8_t intr_src)
-{
-    gb->cpu.ime = false;
-    gb->interrupt.flag &= ~intr_src;
-    sm83_push_word(gb, gb->cpu.pc);
-    gb->cpu.pc = interrupt_vector[intr_src];
-}
-
 void interrupt_process(struct gb *gb)
 {
     bool is_interrupt = IS_INTERRUPT_PENDING();
@@ -1901,16 +1887,32 @@ void interrupt_process(struct gb *gb)
         gb->mode = (!gb->cpu.ime) ? HALT_BUG : NORMAL;
     gb->interrupt.interrupt_handled = gb->cpu.ime && is_interrupt;
     if (gb->interrupt.interrupt_handled) {
-        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
-            interrupt_handler(gb, INTR_SRC_VBLANK);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
-            interrupt_handler(gb, INTR_SRC_LCD);
-        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
-            interrupt_handler(gb, INTR_SRC_TIMER);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
-            interrupt_handler(gb, INTR_SRC_SERIAL);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD)
-            interrupt_handler(gb, INTR_SRC_JOYPAD);
+        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK) {
+            gb->cpu.ime = false;
+            sm83_push_word(gb, gb->cpu.pc);
+            gb->interrupt.flag &= ~INTR_SRC_VBLANK;
+            gb->cpu.pc = 0x40;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
+            gb->cpu.ime = false;
+            sm83_push_word(gb, gb->cpu.pc);
+            gb->interrupt.flag &= ~INTR_SRC_LCD;
+            gb->cpu.pc = 0x48;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER) {
+            gb->cpu.ime = false;
+            sm83_push_word(gb, gb->cpu.pc);
+            gb->interrupt.flag &= ~INTR_SRC_TIMER;
+            gb->cpu.pc = 0x50;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL) {
+            gb->cpu.ime = false;
+            sm83_push_word(gb, gb->cpu.pc);
+            gb->interrupt.flag &= ~INTR_SRC_SERIAL;
+            gb->cpu.pc = 0x58;
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD) {
+            gb->cpu.ime = false;
+            sm83_push_word(gb, gb->cpu.pc);
+            gb->interrupt.flag &= ~INTR_SRC_JOYPAD;
+            gb->cpu.pc = 0x60;
+        }
     }
 }
 

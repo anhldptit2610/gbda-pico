@@ -15,8 +15,9 @@
 //#include "dmg-acid2.h"
 // #include "Pitman.h"
 // #include "Alien_3.h"
-#include "Ms_PacMan.h"
-// #include "Kirby_Dream_Land.h"
+// #include "Ms_PacMan.h"
+#include "Kirby_Dream_Land.h"
+// #include "Dr_Mario.h"
 
 struct gb gb;
 bool button[8];
@@ -209,12 +210,13 @@ int main(void)
     multicore_launch_core1(core1_entry);
 
     sm83_init(&gb);
-//    cartridge_load(&gb, dmg_acid2_gb, dmg_acid2_gb_len);
+    // cartridge_load(&gb, dmg_acid2_gb, dmg_acid2_gb_len);
     // cartridge_load(&gb, Pitman_gb, Pitman_gb_len);
-//    cartridge_load(&gb, tetris, tetris_rom_size);
-//   cartridge_load(&gb, Alien_3_gb, Alien_3_gb_len);
-//    cartridge_load(&gb, Kirby_Dream_Land_gb, Kirby_Dream_Land_gb_len);
-    cartridge_load(&gb, Ms_PacMan_gb, Ms_PacMan_gb_len);
+    // cartridge_load(&gb, tetris, tetris_rom_size);
+    // cartridge_load(&gb, Alien_3_gb, Alien_3_gb_len);
+    cartridge_load(&gb, Kirby_Dream_Land_gb, Kirby_Dream_Land_gb_len);
+    // cartridge_load(&gb, Ms_PacMan_gb, Ms_PacMan_gb_len);
+    // cartridge_load(&gb, Dr_Mario_gb, Dr_Mario_gb_len);
     load_state_after_booting(&gb);
     while (1) {
         tx.ly = gb.ppu.ly;
