@@ -40,6 +40,9 @@
         "03-op_sp_hl.h": "c",
         "gbda-pico.h": "c",
         "dma.h": "c",
-        "stdint.h": "c"
+        "stdint.h": "c",
+        "dmg-acid2.h": "c",
+        "pitman.h": "c",
+        "kirby_dream_land.h": "c"
     }
 }

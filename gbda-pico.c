@@ -10,8 +10,12 @@
 #include "pico/multicore.h"
 #include "gbda-pico.h"
 #include "ili9225.h"
+//#include "Boxxle.h"
 //#include "tetris.h"
-#include "dmg-acid2.h"
+//#include "dmg-acid2.h"
+// #include "Pitman.h"
+// #include "Alien_3.h"
+#include "Kirby_Dream_Land.h"
 
 struct gb gb;
 bool button[8];
@@ -89,13 +93,20 @@ void joypad_callback(uint gpio, uint32_t events)
     }
 }
 
-static inline void joypad_check_button(int i)
+static inline void joypad_check_button(void)
 {
-    if (!button[i]) {
-        gb.joypad.button[i] = 0;
+    gb.joypad.button[JOYPAD_A] = gpio_get(JOYPAD_A_PIN);
+    gb.joypad.button[JOYPAD_B] = gpio_get(JOYPAD_B_PIN);
+    gb.joypad.button[JOYPAD_SELECT] = gpio_get(JOYPAD_SELECT_PIN);
+    gb.joypad.button[JOYPAD_START] = gpio_get(JOYPAD_START_PIN);
+    gb.joypad.button[JOYPAD_RIGHT] = gpio_get(JOYPAD_RIGHT_PIN);
+    gb.joypad.button[JOYPAD_UP] = gpio_get(JOYPAD_UP_PIN);
+    gb.joypad.button[JOYPAD_DOWN] = gpio_get(JOYPAD_DOWN_PIN);
+    gb.joypad.button[JOYPAD_LEFT] = gpio_get(JOYPAD_LEFT_PIN);
+    if (!gb.joypad.button[JOYPAD_A] || !gb.joypad.button[JOYPAD_B] || !gb.joypad.button[JOYPAD_SELECT] || !gb.joypad.button[JOYPAD_START] ||
+        !gb.joypad.button[JOYPAD_RIGHT] || !gb.joypad.button[JOYPAD_UP] || !gb.joypad.button[JOYPAD_DOWN] || !gb.joypad.button[JOYPAD_LEFT]) {
         gb.interrupt.flag |= INTR_SRC_JOYPAD;
-    } else {
-        gb.joypad.button[i] = 1;
+        interrupt_process(&gb);
     }
 }
 
@@ -105,14 +116,6 @@ void joypad_init(void)
                     (1U << JOYPAD_RIGHT_PIN) | (1U << JOYPAD_UP_PIN) | (1U << JOYPAD_DOWN_PIN) | (1U << JOYPAD_LEFT_PIN));
     gpio_set_dir_in_masked((1U << JOYPAD_A_PIN) | (1U << JOYPAD_B_PIN) | (1U << JOYPAD_SELECT_PIN) | (1U << JOYPAD_START_PIN) |
                     (1U << JOYPAD_RIGHT_PIN) | (1U << JOYPAD_UP_PIN) | (1U << JOYPAD_DOWN_PIN) | (1U << JOYPAD_LEFT_PIN));
-    gpio_set_irq_enabled_with_callback(JOYPAD_LEFT_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_RIGHT_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_UP_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_DOWN_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_A_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_B_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_SELECT_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
-    gpio_set_irq_enabled_with_callback(JOYPAD_START_PIN, GPIO_IRQ_EDGE_FALL, true, &joypad_callback);
 }
 
 struct pixel_buffer line_buffer[2];
@@ -201,7 +204,11 @@ int main(void)
     multicore_launch_core1(core1_entry);
 
     sm83_init(&gb);
-    cartridge_load(&gb, dmg_acid2_gb, dmg_acid2_gb_len);
+//    cartridge_load(&gb, dmg_acid2_gb, dmg_acid2_gb_len);
+    // cartridge_load(&gb, Pitman_gb, Pitman_gb_len);
+//    cartridge_load(&gb, tetris, tetris_rom_size);
+//   cartridge_load(&gb, Alien_3_gb, Alien_3_gb_len);
+   cartridge_load(&gb, Kirby_Dream_Land_gb, Kirby_Dream_Land_gb_len);
     load_state_after_booting(&gb);
     while (1) {
         tx.ly = gb.ppu.ly;
@@ -212,8 +219,7 @@ int main(void)
             gb.ppu.frame_ready = false;
             diff = time_us_64() - start;
             start = time_us_64();
-            for (int i = 0; i < 8; i++)
-                joypad_check_button(i);
+            joypad_check_button();
             memset(button, 1, 8);
         }
         tx.cmd = CMD_DISPLAY_LINE;

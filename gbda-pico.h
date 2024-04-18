@@ -180,6 +180,30 @@ typedef enum {
     SPRITE,
 } pixel_type_t;
 
+typedef enum {
+    NO_MBC = 0x00,
+    MBC1 = 0x01,
+    MBC1_RAM = 0x02,
+    MBC1_RAM_BATTERY = 0x03,
+    MBC2 = 0x05,
+    MBC2_BATTERY = 0x06,
+    MBC3_TIMER_BATTERY = 0x0f,
+    MBC3_TIMER_RAM_BATTERY = 0x10,
+    MBC3 = 0x11,
+    MBC3_RAM = 0x12,
+    MBC3_RAM_BATTERY = 0x13,
+} mbc_t;
+
+static uint8_t mbc1_bit_mask[] = {
+    [2]   = 0b00000001,
+    [4]   = 0b00000011,
+    [8]   = 0b00000111,
+    [16]  = 0b00001111,
+    [32]  = 0b00011111,
+    [64]  = 0b00011111,
+    [128] = 0b00011111,
+};
+
 struct sm83 {
     bool ime;
     union {
@@ -526,12 +550,14 @@ const uint8_t cb_instr_cycle[256] = {
     gb->ppu.stat.ppu_mode = Mode;   \
     gb->ppu.mode = Mode
 
+/* MBC declarations */
+uint8_t mbc1_read(struct gb *gb, uint_fast16_t addr);
+void mbc1_write(struct gb *gb, uint16_t addr, uint8_t val);
+
 /* bus declarations */
 uint8_t dma_get_data(struct gb *gb, uint16_t addr);
 uint8_t bus_read(struct gb *gb, uint_fast16_t addr);
 void bus_write(struct gb *gb, uint16_t addr, uint8_t val);
-
-void push_word(struct gb *gb, uint16_t val);
 
 /* interrupt declarations */
 uint8_t interrupt_read(struct gb *gb, uint16_t addr);
@@ -1637,8 +1663,6 @@ void sm83_step(struct gb *gb)
 
     /* ppu handling */
     if (!gb->ppu.lcdc.ppu_enable) {
-        if (!gb->ppu.scan_line_ready)
-            gb->ppu.scan_line_ready = true;
         return;
     }
     gb->ppu.ticks += gb->executed_cycle * 4;
@@ -1670,7 +1694,7 @@ void sm83_step(struct gb *gb)
                         break;
                 }
             }
-//            qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
+            qsort(gb->ppu.oam_entry, gb->ppu.oam_entry_cnt, sizeof(struct oam_entry), cmpfunc);
 
             // draw the scanline
             ppu_draw_scanline(gb);
@@ -1783,7 +1807,7 @@ void ppu_draw_scanline(struct gb *gb)
 
     // we deal with window first
     window_offset = 0;
-    gb->ppu.draw_window_this_line = gb->ppu.lcdc.bg_win_enable && gb->ppu.window_in_frame && (IN_RANGE(gb->ppu.wx - 7, 0, 159));
+    gb->ppu.draw_window_this_line = gb->ppu.lcdc.win_enable && gb->ppu.window_in_frame && (IN_RANGE(gb->ppu.wx - 7, 0, 159));
     if (gb->ppu.draw_window_this_line) {
         for (int i = gb->ppu.wx - 7; i < SCREEN_WIDTH; i++) {
             if ((window_offset % 8) == 0) {
@@ -1792,6 +1816,7 @@ void ppu_draw_scanline(struct gb *gb)
             }
             color_id_low = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2) >> (7 - (window_offset % 8))) & 0x01;
             color_id_high = (READ_VRAM(tile_addr + (gb->ppu.window_line_cnt % 8) * 2 + 1) >> (7 - (window_offset % 8))) & 0x01;
+            color_id[i] = color_id_low | (color_id_high << 1);
             color[i] = GET_COLOR_ID(BGP, color_id_low | (color_id_high << 1));
             window_offset++;
         }
@@ -1799,15 +1824,13 @@ void ppu_draw_scanline(struct gb *gb)
     }
 
     // then come to background
-    non_window_range = (gb->ppu.draw_window_this_line) ? gb->ppu.wx - 8 : SCREEN_WIDTH;
+    non_window_range = (gb->ppu.draw_window_this_line) ? gb->ppu.wx - 7 : SCREEN_WIDTH;
     offset_y = (gb->ppu.ly + gb->ppu.scy) & 0xff;
     for (int i = 0; i < non_window_range; i++) {
         offset_x = (i + gb->ppu.scx) & 0xff;
-        if ((i % 8) == 0) {
-            tile_index = READ_VRAM(gb->ppu.lcdc.bg_tile_map + ((offset_x / 8 + 32 * (offset_y / 8)) & 0x3ff));
-            tile_addr = (gb->ppu.lcdc.bg_win_tiles == 0x8000)
+        tile_index = READ_VRAM(gb->ppu.lcdc.bg_tile_map + ((offset_x / 8 + 32 * (offset_y / 8)) & 0x3ff));
+        tile_addr = (gb->ppu.lcdc.bg_win_tiles == 0x8000)
                         ? 0x8000 + 16 * (uint8_t)tile_index : 0x9000 + 16 * (int8_t)tile_index;
-        }
         color_id_low = (READ_VRAM(tile_addr + (offset_y % 8) * 2) >> (7 - (offset_x % 8))) & 0x01;
         color_id_high = (READ_VRAM(tile_addr + (offset_y % 8) * 2 + 1) >> (7 - (offset_x % 8))) & 0x01;
         color_id[i] = color_id_low | (color_id_high << 1);
@@ -1881,9 +1904,10 @@ void interrupt_process(struct gb *gb)
     if (gb->interrupt.interrupt_handled) {
         if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK)
             interrupt_handler(gb, INTR_SRC_VBLANK);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD)
+        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
+            printf("LCD interrupt fired\n");
             interrupt_handler(gb, INTR_SRC_LCD);
-        else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
+        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER)
             interrupt_handler(gb, INTR_SRC_TIMER);
         else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL)
             interrupt_handler(gb, INTR_SRC_SERIAL);
@@ -2051,6 +2075,7 @@ void load_state_after_booting(struct gb *gb)
     ppu->lcdc.obj_enable = BIT(val, 1);
     ppu->lcdc.bg_win_enable = BIT(val, 0);
     ppu->stat.val = 0x85;
+    ppu->stat_intr_line = 0;
     ppu->scy = 0x00;
     ppu->scx = 0x00;
     ppu->ly = 0x00;
@@ -2078,17 +2103,17 @@ void load_state_after_booting(struct gb *gb)
     memset(joypad->button, 1, 8);
     joypad->joyp.val = 0xcf;
 
-    // // mbc1
-    // mbc->mbc1.ram_enable = 0;
-    // mbc->mbc1.banking_mode = 0;
-    // mbc->mbc1.rom_bank = 0;
-    // mbc->mbc1.ram_bank = 0;
-    // mbc->mbc1.has_battery = false;
+    // mbc1
+    mbc->mbc1.ram_enable = 0;
+    mbc->mbc1.banking_mode = 0;
+    mbc->mbc1.rom_bank = 0;
+    mbc->mbc1.ram_bank = 0;
+    mbc->mbc1.has_battery = false;
 
-    // // mbc3
-    // mbc->mbc3.ram_enable = false;
-    // mbc->mbc3.rom_bank = 0;
-    // mbc->mbc3.ram_bank = 0;
+    // mbc3
+    mbc->mbc3.ram_enable = false;
+    mbc->mbc3.rom_bank = 0;
+    mbc->mbc3.ram_bank = 0;
 
 
 
@@ -2197,11 +2222,28 @@ void load_state_after_booting(struct gb *gb)
 /************************************* bus related parts **************************************/
 /**********************************************************************************************/
 
+uint8_t mbc1_read(struct gb *gb, uint_fast16_t addr)
+{
+    return (IN_RANGE(addr, 0x0000, 0x3fff)) ? gb->cart.rom[addr] : gb->cart.rom[addr - 0x4000 + 0x4000 * (gb->mbc.mbc1.rom_bank & mbc1_bit_mask[gb->cart.infos.bank_size])];
+}
+
+uint8_t mbc0_read(struct gb *gb, uint_fast16_t addr)
+{
+    return gb->cart.rom[addr];
+}
+
+uint8_t (*read_func[])(struct gb *gb, uint_fast16_t addr) = {
+    [NO_MBC] = mbc0_read,
+    [MBC1] = mbc1_read,
+};
+
 uint8_t bus_read(struct gb *gb, uint_fast16_t addr)
 {
+    uint8_t ret = 0xff, rom_bank;
+
     switch (GET_MEM_REGION(addr)) {
     case ROM:
-        return gb->cart.rom[addr];
+        return read_func[gb->cart.infos.type](gb, addr);
     case VRAM:
         return gb->vram[addr - 0x8000];
     case EXTERN_RAM:
@@ -2293,7 +2335,8 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
 {
     switch (GET_MEM_REGION(addr)) {
     case ROM:
-        // TODO: support more MBCs
+        if (gb->cart.infos.type == MBC1)
+            mbc1_write(gb, addr, val);
         break;
     case VRAM:
         gb->vram[addr - 0x8000] = val;
@@ -2413,4 +2456,16 @@ void bus_write(struct gb *gb, uint16_t addr, uint8_t val)
     default:
         break;
     }
+}
+
+void mbc1_write(struct gb *gb, uint16_t addr, uint8_t val)
+{
+    if (IN_RANGE(addr, 0x0000, 0x1fff))
+        gb->mbc.mbc1.ram_enable = val == 0x0a;
+    else if (IN_RANGE(addr, 0x2000, 0x3fff))
+        gb->mbc.mbc1.rom_bank = (!(val & 0x1f)) ? 1 : val & 0x1f;
+    else if (IN_RANGE(addr, 0x4000, 0x5fff))
+        gb->mbc.mbc1.ram_bank = val & 0x03; 
+    else if (IN_RANGE(addr, 0x6000, 0x7fff))
+        gb->mbc.mbc1.banking_mode = BIT(val, 0);
 }
