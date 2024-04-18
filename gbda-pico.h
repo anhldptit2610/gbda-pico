@@ -1739,33 +1739,12 @@ void sm83_step(struct gb *gb)
         (gb->ppu.stat.mode1_int_select && gb->ppu.stat.ppu_mode == VBLANK) ||
         (gb->ppu.stat.mode2_int_select && gb->ppu.stat.ppu_mode == OAM_SCAN) || 
         (gb->ppu.stat.lyc_int_select && gb->ppu.stat.lyc_equal_ly));
-        if (!gb->ppu.stat_intr_line && stat_intr_line) {
+        if (!gb->ppu.stat_intr_line && stat_intr_line)
             INTERRUPT_REQUEST(INTR_SRC_LCD);
-        }
         gb->ppu.stat_intr_line = stat_intr_line;
     }
 
-    gb->interrupt.interrupt_handled = gb->cpu.ime && IS_INTERRUPT_PENDING();
-    if (gb->interrupt.interrupt_handled) {
-        gb->cpu.ime = false;
-        sm83_push_word(gb, gb->cpu.pc);
-        if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_VBLANK) == INTR_SRC_VBLANK) {
-            gb->interrupt.flag &= ~INTR_SRC_VBLANK;
-            gb->cpu.pc = 0x40;
-        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_LCD) == INTR_SRC_LCD) {
-            gb->interrupt.flag &= ~INTR_SRC_LCD;
-            gb->cpu.pc = 0x48;
-        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_TIMER) == INTR_SRC_TIMER) {
-            gb->interrupt.flag &= ~INTR_SRC_TIMER;
-            gb->cpu.pc = 0x50;
-        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_SERIAL) == INTR_SRC_SERIAL) {
-            gb->interrupt.flag &= ~INTR_SRC_SERIAL;
-            gb->cpu.pc = 0x58;
-        } else if ((gb->interrupt.ie & gb->interrupt.flag & INTR_SRC_JOYPAD) == INTR_SRC_JOYPAD) {
-            gb->interrupt.flag &= ~INTR_SRC_JOYPAD;
-            gb->cpu.pc = 0x60;
-        }
-    }
+    interrupt_process(gb);
 }
 
 /**********************************************************************************************/
