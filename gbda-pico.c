@@ -15,7 +15,8 @@
 //#include "dmg-acid2.h"
 // #include "Pitman.h"
 // #include "Alien_3.h"
-#include "Kirby_Dream_Land.h"
+#include "Ms_PacMan.h"
+// #include "Kirby_Dream_Land.h"
 
 struct gb gb;
 bool button[8];
@@ -208,7 +209,8 @@ int main(void)
     // cartridge_load(&gb, Pitman_gb, Pitman_gb_len);
 //    cartridge_load(&gb, tetris, tetris_rom_size);
 //   cartridge_load(&gb, Alien_3_gb, Alien_3_gb_len);
-   cartridge_load(&gb, Kirby_Dream_Land_gb, Kirby_Dream_Land_gb_len);
+//    cartridge_load(&gb, Kirby_Dream_Land_gb, Kirby_Dream_Land_gb_len);
+    cartridge_load(&gb, Ms_PacMan_gb, Ms_PacMan_gb_len);
     load_state_after_booting(&gb);
     while (1) {
         tx.ly = gb.ppu.ly;
